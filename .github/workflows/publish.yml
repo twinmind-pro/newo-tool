@@ -6,6 +6,8 @@ on:
 
 jobs:
   build-and-publish:
+    permissions:
+      contents: write
     strategy:
       matrix:
         goos: [linux, darwin]
