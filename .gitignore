@@ -9,11 +9,10 @@
 # Local state
 /.newo/
 /newo_customers/
+/integrations/**
 
 # Configuration
 /newo.toml
-/newo.main.toml
-/newo.stage.toml
 
 # IDE
 /.idea/

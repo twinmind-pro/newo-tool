@@ -39,6 +39,8 @@ func New(stdout, stderr io.Writer) *App {
 	app.Register(NewPullCommand(stdout, stderr))
 	app.Register(NewPushCommand(stdout, stderr))
 	app.Register(NewStatusCommand(stdout, stderr))
+	app.Register(NewLintCommand(stdout, stderr))
+	app.Register(NewFmtCommand(stdout, stderr))
 
 	return app
 }
