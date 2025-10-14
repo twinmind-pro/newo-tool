@@ -1,12 +1,21 @@
 package linter
 
 import (
+	"bufio"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode"
+)
+
+// ANSI escape codes for colors
+const (
+	ColorRed   = "\033[31m"
+	ColorGreen = "\033[32m"
+	ColorReset = "\033[0m"
 )
 
 // LintError describes a linting error.
@@ -17,7 +26,19 @@ type LintError struct {
 }
 
 func (e LintError) Error() string {
-	return fmt.Sprintf("%s:%d: %s", e.FilePath, e.Line, e.Message)
+	// Extract the descriptive part of the message (before the actual line content)
+	messageParts := strings.SplitN(e.Message, ": ", 2)
+	descriptiveMessage := messageParts[0]
+	lineContent := ""
+	if len(messageParts) > 1 {
+		lineContent = messageParts[1]
+	}
+
+	// Format: FilePath:Line: DescriptiveMessage
+	//         [GREEN]  LineContent[RESET]
+	return fmt.Sprintf("%s:%d: %s\n%s  %s%s",
+		e.FilePath, e.Line, descriptiveMessage,
+		ColorGreen, lineContent, ColorReset)
 }
 
 // LintNSLFiles walks the given root path and lints all .nsl files.
@@ -48,15 +69,55 @@ func LintNSLFiles(root string) ([]LintError, error) {
 }
 
 func lintFile(filePath string) ([]LintError, error) {
-	content, err := os.ReadFile(filePath)
+	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, err
 	}
-	contentStr := string(content)
+	defer func() {
+		if closeErr := file.Close(); err == nil {
+			err = closeErr
+		}
+	}()
 
 	var errors []LintError
+	scanner := bufio.NewScanner(file)
+	lineNumber := 0
 
-	// 1. Check for unbalanced delimiters across the whole file
+	contentBuilder := strings.Builder{}
+	for scanner.Scan() {
+		lineNumber++
+		line := scanner.Text()
+		contentBuilder.WriteString(line + "\n")
+
+		// Check for Cyrillic characters
+		for _, char := range line {
+			if unicode.Is(unicode.Cyrillic, char) {
+				errors = append(errors, LintError{
+					FilePath: filePath,
+					Line:     lineNumber,
+					Message:  fmt.Sprintf("Line contains Cyrillic characters: %s", line),
+				})
+				break // Report only once per line
+			}
+		}
+
+		// Check for NSL comments
+		if strings.Contains(line, "{#") || strings.Contains(line, "#}") {
+			errors = append(errors, LintError{
+				FilePath: filePath,
+				Line:     lineNumber,
+				Message:  fmt.Sprintf("Line contains an NSL comment: %s", line),
+			})
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	contentStr := contentBuilder.String()
+
+	// Existing checks for unbalanced delimiters across the whole file
 	delimiters := []struct {
 		open  string
 		close string
@@ -75,7 +136,7 @@ func lintFile(filePath string) ([]LintError, error) {
 		}
 	}
 
-	// 2. Check for unclosed blocks
+	// Existing checks for unclosed blocks
 	blockErrors := checkBlockTermination(contentStr, filePath)
 	errors = append(errors, blockErrors...)
 

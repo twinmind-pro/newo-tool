@@ -98,9 +98,9 @@ func (c *LintCommand) Run(ctx context.Context, _ []string) error {
 		for _, e := range errors {
 			_, _ = fmt.Fprintln(c.stderr, e.Error())
 		}
-		return fmt.Errorf("%d linting errors found", len(errors))
+		return fmt.Errorf("%d total linting issues found", len(errors))
 	}
 
-	_, _ = fmt.Fprintln(c.stdout, "No linting errors found.")
+	_, _ = fmt.Fprintln(c.stdout, "No linting issues found.")
 	return nil
 }
