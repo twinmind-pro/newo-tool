@@ -1,0 +1,26 @@
+[defaults]
+# Path to download projects to. If empty, downloads to the current directory.
+output_root = ""
+
+# A prefix to be added to the project slug (directory name).
+slug_prefix = ""
+
+# The base URL of the NEWO platform.
+base_url = "https://app.newo.ai"
+
+# The default customer IDN to use if not specified otherwise.
+default_customer = ""
+
+# The default project UUID to use.
+project_id = ""
+
+# You can define multiple customer profiles.
+[[customers]]
+idn = "customer-idn-1"
+api_key = "your-api-key-1"
+project_id = "project-uuid-1"
+
+[[customers]]
+idn = "customer-idn-2"
+api_key = "your-api-key-2"
+project_id = "project-uuid-2"

@@ -1,0 +1,35 @@
+name: Publish newo to GitHub Releases
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build-and-publish:
+    strategy:
+      matrix:
+        goos: [linux, darwin]
+        goarch: [amd64, arm64]
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: actions/setup-go@v4
+      with:
+        go-version: '1.25'
+
+    - name: Build newo
+      env:
+        GOOS: ${{ matrix.goos }}
+        GOARCH: ${{ matrix.goarch }}
+      run: |
+        go build -o newo ./cmd/newo
+
+    - name: Create tarball
+      run: |
+        tar -czf newo-${{ github.ref_name }}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz newo
+
+    - name: Upload tarball to GitHub Releases
+      uses: softprops/action-gh-release@v1
+      with:
+        files: newo-${{ github.ref_name }}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
+        token: ${{ secrets.GITHUB_TOKEN }}
