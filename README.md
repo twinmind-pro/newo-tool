@@ -131,6 +131,22 @@ newo status [flags]
 - `--verbose`: Show detailed information.
 - `--customer <idn>`: Customer IDN to inspect.
 
+### `newo lint`
+
+Lint `.nsl` files in downloaded projects.
+
+```bash
+newo lint
+```
+
+### `newo fmt`
+
+Format `.nsl` files in downloaded projects. This command will automatically trim trailing whitespace and collapse multiple blank lines to a single blank line.
+
+```bash
+newo fmt
+```
+
 ## Development
 
 This project uses Go modules and a `Makefile` for common tasks.
