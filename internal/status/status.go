@@ -105,7 +105,7 @@ func Run(customerIDN string, outputRoot string, verbose bool, stdout io.Writer, 
 
 	for projectIDN, projectData := range projectMap.Projects {
 		projectDir := resolveProjectDir(outputRoot, customerIDN, projectIDN, projectData)
-		flowBase := filepath.Join(projectDir, "flows")
+		flowBase := filepath.Join(projectDir, fsutil.FlowsDir)
 		flowEntries, err := os.ReadDir(flowBase)
 		if err != nil {
 			if errorsIs(err, fs.ErrNotExist) {
@@ -205,8 +205,8 @@ func resolveProjectDir(outputRoot, customerIDN, projectIDN string, project state
 			filepath.Join(outputRoot, projectIDN),
 			filepath.Join(outputRoot, strings.ToLower(projectIDN)))
 	}
-	legacy := filepath.Join("newo_customers", strings.ToLower(customerIDN), "projects", projectIDN)
-	legacyAlt := filepath.Join("newo_customers", strings.ToLower(customerIDN), projectIDN)
+	legacy := filepath.Join(fsutil.DefaultCustomersDir, strings.ToLower(customerIDN), fsutil.ProjectsDir, projectIDN)
+	legacyAlt := filepath.Join(fsutil.DefaultCustomersDir, strings.ToLower(customerIDN), projectIDN)
 	candidates = append(candidates, legacy, legacyAlt)
 
 	for _, candidate := range candidates {
