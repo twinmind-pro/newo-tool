@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/twinmind/newo-tool/internal/fsutil"
 	"github.com/twinmind/newo-tool/internal/state"
 	"github.com/twinmind/newo-tool/internal/util"
 )
@@ -24,28 +25,28 @@ func setupStatusWorkspace(t *testing.T, customer string) string {
 	t.Cleanup(func() {
 		_ = os.Chdir(wd)
 	})
-	if err := os.MkdirAll(filepath.Join(".newo", customer), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(fsutil.StateDirName, customer), fsutil.DirPerm); err != nil {
 		t.Fatalf("mkdir .newo: %v", err)
 	}
 	return tmp
 }
 
 func writeProjectState(t *testing.T, customer string, project state.ProjectMap, hashes map[string]string) {
-	mapPath := filepath.Join(".newo", customer, "map.json")
+	mapPath := filepath.Join(fsutil.StateDirName, customer, fsutil.MapJSON)
 	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		t.Fatalf("marshal map: %v", err)
 	}
-	if err := os.WriteFile(mapPath, data, 0o644); err != nil {
+	if err := os.WriteFile(mapPath, data, fsutil.FilePerm); err != nil {
 		t.Fatalf("write map: %v", err)
 	}
 
-	hashPath := filepath.Join(".newo", customer, "hashes.json")
+	hashPath := filepath.Join(fsutil.StateDirName, customer, fsutil.HashesJSON)
 	data, err = json.MarshalIndent(hashes, "", "  ")
 	if err != nil {
 		t.Fatalf("marshal hashes: %v", err)
 	}
-	if err := os.WriteFile(hashPath, data, 0o644); err != nil {
+	if err := os.WriteFile(hashPath, data, fsutil.FilePerm); err != nil {
 		t.Fatalf("write hashes: %v", err)
 	}
 }
@@ -55,11 +56,11 @@ func TestRunCleanWorkspace(t *testing.T) {
 	setupStatusWorkspace(t, customer)
 
 	projectDir := filepath.Join("integrations", "calcom", "flows", "Flow")
-	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+	if err := os.MkdirAll(projectDir, fsutil.DirPerm); err != nil {
 		t.Fatalf("mkdir project: %v", err)
 	}
 	skillPath := filepath.Join(projectDir, "skill.nsl")
-	if err := os.WriteFile(skillPath, []byte("content"), 0o644); err != nil {
+	if err := os.WriteFile(skillPath, []byte("content"), fsutil.FilePerm); err != nil {
 		t.Fatalf("write skill: %v", err)
 	}
 

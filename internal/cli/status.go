@@ -134,7 +134,7 @@ func (c *StatusCommand) Run(ctx context.Context, _ []string) error {
 }
 
 func listCustomersWithState() ([]string, error) {
-	entries, err := os.ReadDir(".newo")
+	entries, err := os.ReadDir(fsutil.StateDirName)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -147,7 +147,7 @@ func listCustomersWithState() ([]string, error) {
 		if !entry.IsDir() {
 			continue
 		}
-		mapPath := filepath.Join(".newo", entry.Name(), "map.json")
+		mapPath := filepath.Join(fsutil.StateDirName, entry.Name(), fsutil.MapJSON)
 		if _, err := os.Stat(mapPath); err == nil {
 			customers = append(customers, strings.ToUpper(entry.Name()))
 		}

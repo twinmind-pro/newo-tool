@@ -42,7 +42,9 @@ func Load(customerIDN string) (Tokens, bool, error) {
 }
 
 // Save persists tokens for the customer.
-func Save(customerIDN string, tokens Tokens) error {
+var Save = saveTokens
+
+func saveTokens(customerIDN string, tokens Tokens) error {
 	if tokens.AccessToken == "" {
 		return errors.New("access token is required")
 	}

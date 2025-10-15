@@ -10,14 +10,26 @@ import (
 )
 
 const (
-	defaultCustomersDir = "newo_customers"
-	stateDirName        = ".newo"
+	DefaultCustomersDir = "newo_customers"
+	StateDirName        = ".newo"
 	lockDirName         = "locks"
 	lockStaleAfter      = 15 * time.Minute
 
 	// Directory and file permissions used across the workspace.
 	DirPerm  = 0o755
 	FilePerm = 0o644
+
+	// Common directory and file names.
+	ProjectsDir      = "projects"
+	FlowsDir         = "flows"
+	ProjectJSON      = "project.json"
+	AttributesYAML   = "attributes.yaml"
+	FlowsYAML        = "flows.yaml"
+	MapJSON          = "map.json"
+	HashesJSON       = "hashes.json"
+	APIKeysJSON      = "api-keys.json"
+	MetadataYAML     = "metadata.yaml"
+	SkillMetaFileExt = ".meta.yaml"
 )
 
 // ErrLocked indicates the workspace is already locked by another process.
@@ -36,22 +48,22 @@ func ExportProjectDir(root, projectSlug string) string {
 
 // ExportProjectJSONPath returns the project.json path.
 func ExportProjectJSONPath(root, projectSlug string) string {
-	return filepath.Join(ExportProjectDir(root, projectSlug), "project.json")
+	return filepath.Join(ExportProjectDir(root, projectSlug), ProjectJSON)
 }
 
 // ExportAttributesPath returns the attributes.yaml path.
 func ExportAttributesPath(root, projectSlug string) string {
-	return filepath.Join(ExportProjectDir(root, projectSlug), "attributes.yaml")
+	return filepath.Join(ExportProjectDir(root, projectSlug), AttributesYAML)
 }
 
 // ExportFlowsYAMLPath returns the flows.yaml path.
 func ExportFlowsYAMLPath(root, projectSlug string) string {
-	return filepath.Join(ExportProjectDir(root, projectSlug), "flows.yaml")
+	return filepath.Join(ExportProjectDir(root, projectSlug), FlowsYAML)
 }
 
 // ExportFlowDir returns the directory for flow scripts.
 func ExportFlowDir(root, projectSlug, flowIDN string) string {
-	return filepath.Join(ExportProjectDir(root, projectSlug), "flows", flowIDN)
+	return filepath.Join(ExportProjectDir(root, projectSlug), FlowsDir, flowIDN)
 }
 
 // ExportSkillScriptPath returns the path for a skill script under the exported structure.
@@ -59,19 +71,24 @@ func ExportSkillScriptPath(root, projectSlug, flowIDN, fileName string) string {
 	return filepath.Join(ExportFlowDir(root, projectSlug, flowIDN), fileName)
 }
 
+// ExportSkillMetadataPath returns the path for a skill's metadata YAML file.
+func ExportSkillMetadataPath(root, projectSlug, flowIDN, skillIDN string) string {
+	return filepath.Join(ExportFlowDir(root, projectSlug, flowIDN), fmt.Sprintf("%s%s", skillIDN, SkillMetaFileExt))
+}
+
 // CustomerRoot returns the base directory for customer data.
 func CustomerRoot(customerIDN string) string {
-	return filepath.Join(defaultCustomersDir, customerIDN)
+	return filepath.Join(DefaultCustomersDir, customerIDN)
 }
 
 // CustomersRoot returns the root directory containing all customers.
 func CustomersRoot() string {
-	return defaultCustomersDir
+	return DefaultCustomersDir
 }
 
 // CustomerStateDir returns the directory storing state data for the given customer.
 func CustomerStateDir(customerIDN string) string {
-	return filepath.Join(stateDirName, strings.ToLower(customerIDN))
+	return filepath.Join(StateDirName, strings.ToLower(customerIDN))
 }
 
 func ensureDir(path string) error {
@@ -90,7 +107,7 @@ func EnsureParentDir(filePath string) error {
 }
 
 func lockDirectory() string {
-	return filepath.Join(stateDirName, lockDirName)
+	return filepath.Join(StateDirName, lockDirName)
 }
 
 // AcquireLock creates a lock file preventing concurrent destructive operations.
@@ -127,7 +144,7 @@ func AcquireLock(operation string) (func() error, error) {
 }
 
 func projectDir(customerIDN, projectIDN string) string {
-	return filepath.Join(CustomerRoot(customerIDN), "projects", projectIDN)
+	return filepath.Join(CustomerRoot(customerIDN), ProjectsDir, projectIDN)
 }
 
 func agentDir(customerIDN, projectIDN, agentIDN string) string {
@@ -144,7 +161,7 @@ func skillDir(customerIDN, projectIDN, agentIDN, flowIDN, skillIDN string) strin
 
 // ProjectMetadataPath returns path to project metadata YAML.
 func ProjectMetadataPath(customerIDN, projectIDN string) string {
-	return filepath.Join(projectDir(customerIDN, projectIDN), "metadata.yaml")
+	return filepath.Join(projectDir(customerIDN, projectIDN), MetadataYAML)
 }
 
 // ProjectDir exposes the project directory path.
@@ -154,7 +171,7 @@ func ProjectDir(customerIDN, projectIDN string) string {
 
 // AgentMetadataPath returns path to agent metadata YAML.
 func AgentMetadataPath(customerIDN, projectIDN, agentIDN string) string {
-	return filepath.Join(agentDir(customerIDN, projectIDN, agentIDN), "metadata.yaml")
+	return filepath.Join(agentDir(customerIDN, projectIDN, agentIDN), MetadataYAML)
 }
 
 // AgentDir exposes the agent directory path.
@@ -164,7 +181,7 @@ func AgentDir(customerIDN, projectIDN, agentIDN string) string {
 
 // FlowMetadataPath returns path to flow metadata YAML.
 func FlowMetadataPath(customerIDN, projectIDN, agentIDN, flowIDN string) string {
-	return filepath.Join(flowDir(customerIDN, projectIDN, agentIDN, flowIDN), "metadata.yaml")
+	return filepath.Join(flowDir(customerIDN, projectIDN, agentIDN, flowIDN), MetadataYAML)
 }
 
 // FlowDir exposes the flow directory path.
@@ -174,7 +191,7 @@ func FlowDir(customerIDN, projectIDN, agentIDN, flowIDN string) string {
 
 // SkillMetadataPath returns path to skill metadata YAML.
 func SkillMetadataPath(customerIDN, projectIDN, agentIDN, flowIDN, skillIDN string) string {
-	return filepath.Join(skillDir(customerIDN, projectIDN, agentIDN, flowIDN, skillIDN), "metadata.yaml")
+	return filepath.Join(skillDir(customerIDN, projectIDN, agentIDN, flowIDN, skillIDN), MetadataYAML)
 }
 
 // SkillDir exposes the skill directory path.
@@ -189,25 +206,25 @@ func SkillScriptPath(customerIDN, projectIDN, agentIDN, flowIDN, skillIDN, exten
 
 // MapPath returns the map.json path.
 func MapPath(customerIDN string) string {
-	return filepath.Join(CustomerStateDir(customerIDN), "map.json")
+	return filepath.Join(CustomerStateDir(customerIDN), MapJSON)
 }
 
 // HashesPath returns hashes.json path.
 func HashesPath(customerIDN string) string {
-	return filepath.Join(CustomerStateDir(customerIDN), "hashes.json")
+	return filepath.Join(CustomerStateDir(customerIDN), HashesJSON)
 }
 
 // AttributesPath returns attributes.yaml path.
 func AttributesPath(customerIDN string) string {
-	return filepath.Join(CustomerRoot(customerIDN), "attributes.yaml")
+	return filepath.Join(CustomerRoot(customerIDN), AttributesYAML)
 }
 
 // FlowsYAMLPath returns flows.yaml path.
 func FlowsYAMLPath(customerIDN string) string {
-	return filepath.Join(CustomerRoot(customerIDN), "projects", "flows.yaml")
+	return filepath.Join(CustomerRoot(customerIDN), ProjectsDir, FlowsYAML)
 }
 
 // APIKeyRegistryPath returns the path to the API key registry file.
 func APIKeyRegistryPath() string {
-	return filepath.Join(stateDirName, "api-keys.json")
+	return filepath.Join(StateDirName, APIKeysJSON)
 }

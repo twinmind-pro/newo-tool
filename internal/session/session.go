@@ -94,7 +94,9 @@ func New(ctx context.Context, env config.Env, entry customer.Entry, registry *st
 	}
 
 	if refreshed || knownIDN == "" || !strings.EqualFold(knownIDN, profile.IDN) {
-		_ = auth.Save(strings.ToLower(profile.IDN), tokens)
+		if err := auth.Save(strings.ToLower(profile.IDN), tokens); err != nil {
+			return nil, fmt.Errorf("persist tokens: %w", err)
+		}
 	}
 
 	return &Session{
