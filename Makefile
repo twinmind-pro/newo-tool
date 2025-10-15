@@ -25,11 +25,13 @@ lint:
 		exit 1; \
 	}
 
+TEST_TARGET ?= ./...
+
 test:
-	go test ./...
+	go run ./cmd/tester $(TEST_TARGET)
 
 race:
-	go test -race ./...
+	go test -race $(TEST_TARGET)
 
 vuln:
 	@$(VULNCHECK) ./... || { \
