@@ -9,6 +9,10 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+
+	"github.com/twinmind/newo-tool/internal/nsl/ast"
+	"github.com/twinmind/newo-tool/internal/nsl/lexer"
+	"github.com/twinmind/newo-tool/internal/nsl/parser"
 )
 
 // ANSI escape codes for colors
@@ -140,7 +144,28 @@ func lintFile(filePath string) ([]LintError, error) {
 	blockErrors := checkBlockTermination(contentStr, filePath)
 	errors = append(errors, blockErrors...)
 
+	if len(errors) == 0 {
+		program, parseErrors := parseNSLProgram(contentStr)
+		if len(parseErrors) > 0 {
+			return errors, nil
+		}
+
+		variableErrors, err := checkUndefinedVariables(filePath, program)
+		if err != nil {
+			errors = append(errors, LintError{FilePath: filePath, Message: err.Error()})
+		} else {
+			errors = append(errors, variableErrors...)
+		}
+	}
+
 	return errors, nil
+}
+
+func parseNSLProgram(content string) (*ast.Program, []string) {
+	l := lexer.New(content)
+	p := parser.New(l)
+	program := p.ParseProgram()
+	return program, p.Errors()
 }
 
 var blockTagRegex = regexp.MustCompile(`\{%-?\s*(\w+)`)
