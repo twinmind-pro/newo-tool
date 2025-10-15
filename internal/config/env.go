@@ -131,7 +131,7 @@ func looksLikeUUID(value string) bool {
 const (
 	defaultBaseURL       = "https://app.newo.ai"
 	defaultCustomersRoot = "newo_customers"
-	defaultTomlPath      = "newo.toml"
+	DefaultTomlPath      = "newo.toml"
 )
 
 type tomlConfig struct {
@@ -151,18 +151,18 @@ type tomlConfig struct {
 }
 
 func mergeTomlConfig(env *Env, isOutputRootSetInToml *bool) error {
-	path := filepath.Join(".", defaultTomlPath)
+	path := filepath.Join(".", DefaultTomlPath)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
-		return fmt.Errorf("read %s: %w", defaultTomlPath, err)
+		return fmt.Errorf("read %s: %w", DefaultTomlPath, err)
 	}
 
 	var cfg tomlConfig
 	if err := toml.Unmarshal(data, &cfg); err != nil {
-		return fmt.Errorf("parse %s: %w", defaultTomlPath, err)
+		return fmt.Errorf("parse %s: %w", DefaultTomlPath, err)
 	}
 
 	if base := strings.TrimSpace(cfg.Defaults.BaseURL); base != "" && env.BaseURL == defaultBaseURL {

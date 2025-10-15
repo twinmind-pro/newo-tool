@@ -15,13 +15,18 @@ type APIKeyRegistry struct {
 	entries map[string]string
 }
 
+// NewAPIKeyRegistry creates a new, empty registry.
+func NewAPIKeyRegistry() *APIKeyRegistry {
+	return &APIKeyRegistry{entries: map[string]string{}}
+}
+
 // LoadAPIKeyRegistry returns the persisted API key registry.
 func LoadAPIKeyRegistry() (*APIKeyRegistry, error) {
 	path := fsutil.APIKeyRegistryPath()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return &APIKeyRegistry{entries: map[string]string{}}, nil
+			return NewAPIKeyRegistry(), nil
 		}
 		return nil, fmt.Errorf("read api key registry: %w", err)
 	}

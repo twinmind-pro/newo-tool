@@ -4,13 +4,15 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/twinmind/newo-tool/internal/fsutil"
 )
 
 func TestProjectMapRoundTrip(t *testing.T) {
 	tmp := t.TempDir()
 	customer := "TEST"
-	if err := os.MkdirAll(filepath.Join(tmp, ".newo"), 0o755); err != nil {
-		t.Fatalf("mkdir .newo: %v", err)
+	if err := os.MkdirAll(filepath.Join(tmp, fsutil.StateDirName), fsutil.DirPerm); err != nil {
+		t.Fatalf("mkdir %s: %v", fsutil.StateDirName, err)
 	}
 	t.Setenv("HOME", tmp)
 	if err := os.Chdir(tmp); err != nil {

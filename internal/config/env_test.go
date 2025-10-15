@@ -3,6 +3,8 @@ package config
 import (
 	"os"
 	"testing"
+
+	"github.com/twinmind/newo-tool/internal/fsutil"
 )
 
 func withTempDir(t *testing.T) string {
@@ -64,7 +66,7 @@ idn = "ACME"
 api_key = "toml-key"
 project_id = "11111111-1111-1111-1111-111111111111"
 `
-	if err := os.WriteFile("newo.toml", []byte(toml), 0o644); err != nil {
+	if err := os.WriteFile("newo.toml", []byte(toml), fsutil.FilePerm); err != nil {
 		t.Fatalf("write toml: %v", err)
 	}
 

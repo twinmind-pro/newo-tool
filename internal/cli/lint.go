@@ -6,10 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
-	"strings"
 
-	"github.com/BurntSushi/toml"
 	"github.com/twinmind/newo-tool/internal/linter"
 )
 
@@ -36,44 +33,8 @@ func (c *LintCommand) RegisterFlags(_ *flag.FlagSet) {
 	// No flags for the basic version
 }
 
-type lintTomlConfig struct {
-	Defaults struct {
-		OutputRoot *string `toml:"output_root"`
-	} `toml:"defaults"`
-}
-
-func (c *LintCommand) getOutputRoot() (string, error) {
-	// 1. Check environment variable
-	if root := strings.TrimSpace(os.Getenv("NEWO_OUTPUT_ROOT")); root != "" {
-		return root, nil
-	}
-
-	// 2. Check newo.toml
-	path := filepath.Join(".", "newo.toml")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// 3. Fallback to default
-			return "newo_customers", nil
-		}
-		return "", fmt.Errorf("read newo.toml: %w", err)
-	}
-
-	var cfg lintTomlConfig
-	if err := toml.Unmarshal(data, &cfg); err != nil {
-		return "", fmt.Errorf("parse newo.toml: %w", err)
-	}
-
-	if cfg.Defaults.OutputRoot != nil {
-		return strings.TrimSpace(*cfg.Defaults.OutputRoot), nil
-	}
-
-	// 3. Fallback to default
-	return "newo_customers", nil
-}
-
 func (c *LintCommand) Run(ctx context.Context, _ []string) error {
-	outputRoot, err := c.getOutputRoot()
+	outputRoot, err := getOutputRoot()
 	if err != nil {
 		return err
 	}
