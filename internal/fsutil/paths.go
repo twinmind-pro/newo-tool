@@ -59,6 +59,11 @@ func ExportSkillScriptPath(root, projectSlug, flowIDN, fileName string) string {
 	return filepath.Join(ExportFlowDir(root, projectSlug, flowIDN), fileName)
 }
 
+// ExportSkillMetadataPath returns the path for a skill's metadata YAML file.
+func ExportSkillMetadataPath(root, projectSlug, flowIDN, skillIDN string) string {
+	return filepath.Join(ExportFlowDir(root, projectSlug, flowIDN), fmt.Sprintf("%s.meta.yaml", skillIDN))
+}
+
 // CustomerRoot returns the base directory for customer data.
 func CustomerRoot(customerIDN string) string {
 	return filepath.Join(defaultCustomersDir, customerIDN)

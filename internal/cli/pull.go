@@ -395,6 +395,9 @@ func (c *PullCommand) pullFlow(
 		if err := c.exportSkill(projectSlug, flow.IDN, skill, oldHashes, newHashes, force); err != nil {
 			return err
 		}
+		if err := c.exportSkillMetadata(projectSlug, flow.IDN, skill, oldHashes, newHashes, force); err != nil {
+			return err
+		}
 
 		fileName := skill.IDN + "." + platform.ScriptExtension(skill.RunnerType)
 		flowData.Skills[skill.IDN] = state.SkillMetadataInfo{
@@ -414,6 +417,15 @@ func (c *PullCommand) pullFlow(
 
 	agentData.Flows[flow.IDN] = flowData
 	return nil
+}
+
+func (c *PullCommand) exportSkillMetadata(projectSlug, flowIDN string, skill platform.Skill, oldHashes, newHashes state.HashStore, force bool) error {
+	data, err := serialize.SkillMetadata(skill)
+	if err != nil {
+		return err
+	}
+	path := fsutil.ExportSkillMetadataPath(c.outputRoot, projectSlug, flowIDN, skill.IDN)
+	return c.writeFileWithHash(oldHashes, newHashes, path, data, force)
 }
 
 func parametersForMap(skill platform.Skill) []map[string]any {
