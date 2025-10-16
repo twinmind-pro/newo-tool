@@ -16,9 +16,10 @@ import (
 
 // GenerateCommand generates NSL code using an LLM.
 type GenerateCommand struct {
-	stdout io.Writer
-	stderr io.Writer
-	prompt *string
+	stdout    io.Writer
+	stderr    io.Writer
+	prompt    *string
+	llmClient llm.LLMClient // Allow overriding for tests
 }
 
 // NewGenerateCommand constructs a generate command.
@@ -43,31 +44,34 @@ func (c *GenerateCommand) Run(ctx context.Context, _ []string) error {
 		return fmt.Errorf("prompt is required")
 	}
 
-	// Load environment and LLM configurations
-	env, err := config.LoadEnv()
-	if err != nil {
-		return fmt.Errorf("failed to load environment: %w", err)
-	}
+	// Use the pre-configured llmClient if it exists (for testing).
+	// Otherwise, load the configuration and create a new client.
+	if c.llmClient == nil {
+		env, err := config.LoadEnv()
+		if err != nil {
+			return fmt.Errorf("failed to load environment: %w", err)
+		}
+		if len(env.FileLLMs) == 0 {
+			return fmt.Errorf("no LLM configurations found in newo.toml")
+		}
+		llmConfig := env.FileLLMs[0]
 
-	if len(env.FileLLMs) == 0 {
-		return fmt.Errorf("no LLM configurations found in newo.toml")
+		client, err := llm.NewClient(llmConfig)
+		if err != nil {
+			return fmt.Errorf("failed to create LLM client: %w", err)
+		}
+		c.llmClient = client
 	}
-	// For now, just pick the first LLM config
-	llmConfig := env.FileLLMs[0]
-
 
 	// 1. Construct a few-shot prompt for direct NSL generation
 	llmPrompt := fmt.Sprintf(`You are an expert in the NSL templating language. Your task is to generate NSL code based on the user\'s request.\n\nHere are some examples of how to write NSL:\n\n---\nRequest: "display the value of the \'username\' variable, but in all lowercase"\nNSL Code: {{ username | lower }}\n---\nRequest: "set the \'price\' variable to the value of \'base_price\' plus 10"\nNSL Code: {%% set price = base_price + 10 %%}\n---\nRequest: "if the user is an admin, show \'Admin Panel\'"\nNSL Code: {%% if user.is_admin %%}Admin Panel{%% endif %%}\n---\nRequest: "for each item in the \'products\' list, display its name"\nNSL Code: {%% for item in products %%}{{ item.name }}{%% endfor %%}\n---\n\nNow, generate the NSL code for the following request. Output ONLY the NSL code and nothing else.\n\nRequest: \"%s\"\nNSL Code:`, *c.prompt)
 
-	// 3. Call LLM
-	llmClient, err := llm.NewClient(llmConfig)
+	// 2. Call LLM
+	generatedCode, err := c.llmClient.GenerateCode(llmPrompt)
 	if err != nil {
-		return fmt.Errorf("failed to create LLM client: %w", err)
+		return fmt.Errorf("LLM code generation failed: %w", err)
 	}
-	generatedCode, err := llmClient.GenerateCode(llmPrompt)
-	if err != nil {
-		return fmt.Errorf("failed to generate code: %w", err)
-	}
+
 	// 3. Parse the generated code to validate it and build an AST
 	l := lexer.New(generatedCode)
 	p := parser.New(l)
