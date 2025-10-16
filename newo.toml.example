@@ -24,3 +24,14 @@ project_id = "project-uuid-1"
 idn = "customer-idn-2"
 api_key = "your-api-key-2"
 project_id = "project-uuid-2"
+
+# You can define multiple LLM configurations.
+[[llms]]
+provider = "gemini"
+model = "gemini-pro"
+api_key = "YOUR_GEMINI_API_KEY"
+
+[[llms]]
+provider = "openai"
+model = "gpt-4"
+api_key = "YOUR_OPENAI_API_KEY"
