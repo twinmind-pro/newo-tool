@@ -6,9 +6,13 @@ override VULNCHECK := govulncheck
 
 .PHONY: build install clean lint test race vuln fmt
 
+VERSION := $(shell git describe --tags --always)
+COMMIT := $(shell git rev-parse HEAD)
+
 build: fmt lint
 	@mkdir -p $(BUILD_DIR)
-	go build -o $(BUILD_DIR)/$(BIN_NAME) ./cmd/newo
+	@echo "LDFLAGS: -X 'github.com/twinmind/newo-tool/internal/version.Version=$(VERSION)' -X 'github.com/twinmind/newo-tool/internal/version.Commit=$(COMMIT)'"
+	go build -ldflags "-X 'github.com/twinmind/newo-tool/internal/version.Version=$(VERSION)' -X 'github.com/twinmind/newo-tool/internal/version.Commit=$(COMMIT)'" -o $(BUILD_DIR)/$(BIN_NAME) ./cmd/newo
 
 install:
 	@mkdir -p $(GOBIN)
