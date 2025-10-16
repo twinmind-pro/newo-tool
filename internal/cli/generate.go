@@ -2,16 +2,15 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
-	"reflect"
 	"strings"
 
+	"github.com/twinmind/newo-tool/internal/config"
 	"github.com/twinmind/newo-tool/internal/llm"
-	"github.com/twinmind/newo-tool/internal/nsl/ast"
-	"github.com/twinmind/newo-tool/internal/nsl/jsonschema"
+	"github.com/twinmind/newo-tool/internal/nsl/lexer"
+	"github.com/twinmind/newo-tool/internal/nsl/parser"
 	"github.com/twinmind/newo-tool/internal/nsl/printer"
 )
 
@@ -44,101 +43,43 @@ func (c *GenerateCommand) Run(ctx context.Context, _ []string) error {
 		return fmt.Errorf("prompt is required")
 	}
 
-	// 1. Generate JSON Schema for NSL AST
-	generator := jsonschema.New()
-	programSchema, err := generator.Generate(reflect.TypeOf(&ast.Program{}))
+	// Load environment and LLM configurations
+	env, err := config.LoadEnv()
 	if err != nil {
-		return fmt.Errorf("failed to generate NSL AST schema: %w", err)
+		return fmt.Errorf("failed to load environment: %w", err)
 	}
 
-	programSchemaJSON, err := jsonschema.ToJSONString(programSchema)
-	if err != nil {
-		return fmt.Errorf("failed to marshal NSL AST schema to JSON: %w", err)
+	if len(env.FileLLMs) == 0 {
+		return fmt.Errorf("no LLM configurations found in newo.toml")
 	}
+	// For now, just pick the first LLM config
+	llmConfig := env.FileLLMs[0]
 
-	// 2. Construct LLM prompt with schema
-	llmPrompt := fmt.Sprintf("Generate NSL code as a JSON object conforming to the following JSON Schema. The JSON object should represent the Abstract Syntax Tree (AST) of the NSL code. The NSL code should fulfill the following request: \"%s\".\n\nJSON Schema:\n%s\n\nJSON AST:", *c.prompt, programSchemaJSON)
+
+	// 1. Construct a few-shot prompt for direct NSL generation
+	llmPrompt := fmt.Sprintf(`You are an expert in the NSL templating language. Your task is to generate NSL code based on the user\'s request.\n\nHere are some examples of how to write NSL:\n\n---\nRequest: "display the value of the \'username\' variable, but in all lowercase"\nNSL Code: {{ username | lower }}\n---\nRequest: "set the \'price\' variable to the value of \'base_price\' plus 10"\nNSL Code: {%% set price = base_price + 10 %%}\n---\nRequest: "if the user is an admin, show \'Admin Panel\'"\nNSL Code: {%% if user.is_admin %%}Admin Panel{%% endif %%}\n---\nRequest: "for each item in the \'products\' list, display its name"\nNSL Code: {%% for item in products %%}{{ item.name }}{%% endfor %%}\n---\n\nNow, generate the NSL code for the following request. Output ONLY the NSL code and nothing else.\n\nRequest: \"%s\"\nNSL Code:`, *c.prompt)
 
 	// 3. Call LLM
-	llmClient := llm.NewClient()
-	mockLLMResponse, err := llmClient.GenerateCode(llmPrompt)
+	llmClient, err := llm.NewClient(llmConfig)
 	if err != nil {
-		return fmt.Errorf("LLM code generation failed: %w", err)
+		return fmt.Errorf("failed to create LLM client: %w", err)
+	}
+	generatedCode, err := llmClient.GenerateCode(llmPrompt)
+	if err != nil {
+		return fmt.Errorf("failed to generate code: %w", err)
+	}
+	// 3. Parse the generated code to validate it and build an AST
+	l := lexer.New(generatedCode)
+	p := parser.New(l)
+	program := p.ParseProgram()
+	if len(p.Errors()) > 0 {
+		return fmt.Errorf("failed to parse generated NSL code: %v\n--- Generated Code ---\n%s", p.Errors(), generatedCode)
 	}
 
-	// 4. Unmarshal LLM response into AST
-	var generatedProgram ast.Program
-	if err := unmarshalASTJSON([]byte(mockLLMResponse), &generatedProgram); err != nil {
-		return fmt.Errorf("failed to unmarshal LLM response into AST: %w", err)
-	}
-
-	// 5. Convert AST to NSL code using Pretty-Printer
+	// 4. Convert the validated AST back to clean, formatted NSL code
 	prettyPrinter := printer.New()
-	generatedNSL := prettyPrinter.Print(&generatedProgram)
+	finalNSL := prettyPrinter.Print(program)
 
-	_, err = fmt.Fprintln(c.stdout, generatedNSL)
+	_, err = fmt.Fprintln(c.stdout, finalNSL)
 	return err
-}
-
-// unmarshalASTJSON unmarshals the LLM's JSON response into an ast.Program.
-func unmarshalASTJSON(data []byte, program *ast.Program) error {
-	var temp struct {
-		Statements []json.RawMessage `json:"Statements"` // Unmarshal raw messages first
-	}
-
-	if err := json.Unmarshal(data, &temp); err != nil {
-		return err
-	}
-
-	program.Statements = make([]ast.Statement, len(temp.Statements))
-	for i, rawStmt := range temp.Statements {
-		var sw struct {
-			Type string `json:"_type"`
-		}
-		if err := json.Unmarshal(rawStmt, &sw); err != nil {
-			return err
-		}
-
-		switch sw.Type {
-		case "SetStatement":
-			var stmt ast.SetStatement
-			if err := json.Unmarshal(rawStmt, &stmt); err != nil {
-				return err
-			}
-			program.Statements[i] = &stmt
-		case "OutputStatement":
-			var stmt ast.OutputStatement
-			if err := json.Unmarshal(rawStmt, &stmt); err != nil {
-				return err
-			}
-			program.Statements[i] = &stmt
-		case "ExpressionStatement":
-			var stmt ast.ExpressionStatement
-			if err := json.Unmarshal(rawStmt, &stmt); err != nil {
-				return err
-			}
-			program.Statements[i] = &stmt
-		case "IfStatement":
-			var stmt ast.IfStatement
-			if err := json.Unmarshal(rawStmt, &stmt); err != nil {
-				return err
-			}
-			program.Statements[i] = &stmt
-		case "ForStatement":
-			var stmt ast.ForStatement
-			if err := json.Unmarshal(rawStmt, &stmt); err != nil {
-				return err
-			}
-			program.Statements[i] = &stmt
-		case "BlockStatement":
-			var stmt ast.BlockStatement
-			if err := json.Unmarshal(rawStmt, &stmt); err != nil {
-				return err
-			}
-			program.Statements[i] = &stmt
-		default:
-			return fmt.Errorf("unknown statement type: %s", sw.Type)
-		}
-	}
-	return nil
 }

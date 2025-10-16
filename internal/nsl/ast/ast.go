@@ -675,7 +675,7 @@ func unmarshalNode(raw json.RawMessage) (Node, error) {
 	switch nw.Type {
 	// Statements
 	case "Program": // Program is the root, not a child node to be unmarshaled this way
-		return nil, fmt.Errorf("Program should not be unmarshaled via unmarshalNode")
+		return nil, fmt.Errorf("program should not be unmarshaled via unmarshalNode")
 	case "SetStatement":
 		var stmt SetStatement
 		if err := json.Unmarshal(raw, &stmt); err != nil {
@@ -762,7 +762,7 @@ func unmarshalNode(raw json.RawMessage) (Node, error) {
 		}
 		return &expr, nil
 	case "Token": // Token is a struct, not an interface, so it should be unmarshaled directly
-		return nil, fmt.Errorf("Token should not be unmarshaled via unmarshalNode")
+		return nil, fmt.Errorf("token should not be unmarshaled via unmarshalNode")
 	default:
 		return nil, fmt.Errorf("unknown AST node type: %s", nw.Type)
 	}

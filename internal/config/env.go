@@ -25,6 +25,7 @@ type Env struct {
 	FileDefaultCustomer string
 	OutputRoot          string
 	SlugPrefix          string
+	FileLLMs            []LLMConfig // Added
 }
 
 // FileCustomer describes a customer defined in newo.toml.
@@ -32,6 +33,13 @@ type FileCustomer struct {
 	IDN       string
 	APIKey    string
 	ProjectID string
+}
+
+// LLMConfig describes an LLM configuration defined in newo.toml.
+type LLMConfig struct {
+	Provider string
+	Model    string
+	APIKey   string
 }
 
 // LoadEnv reads environment variables, applies defaults, merges newo.toml, and validates values.
@@ -76,25 +84,7 @@ func LoadEnv() (Env, error) {
 			return Env{}, err
 		}
 	}
-
-	if err := validateAuthConfig(env); err != nil {
-		return Env{}, err
-	}
-
 	return env, nil
-}
-
-func validateAuthConfig(env Env) error {
-	hasAPIKey := env.APIKey != ""
-	hasAPIKeyArray := env.APIKeysJSON != ""
-	hasDirectTokens := env.AccessToken != "" && env.RefreshToken != ""
-	hasFileCustomers := len(env.FileCustomers) > 0
-
-	if !hasAPIKey && !hasAPIKeyArray && !hasDirectTokens && !hasFileCustomers {
-		return errors.New("authentication required: configure NEWO_API_KEY, NEWO_API_KEYS, or newo.toml customers")
-	}
-
-	return nil
 }
 
 func validateURL(raw, name string) error {
@@ -148,6 +138,11 @@ type tomlConfig struct {
 		APIKey    string `toml:"api_key"`
 		ProjectID string `toml:"project_id"`
 	} `toml:"customers"`
+	LLMs []struct {
+		Provider string `toml:"provider"`
+		Model    string `toml:"model"`
+		APIKey   string `toml:"api_key"`
+	} `toml:"llms"` // Added
 }
 
 func mergeTomlConfig(env *Env, isOutputRootSetInToml *bool) error {
@@ -192,6 +187,19 @@ func mergeTomlConfig(env *Env, isOutputRootSetInToml *bool) error {
 			IDN:       strings.TrimSpace(c.IDN),
 			APIKey:    apiKey,
 			ProjectID: strings.TrimSpace(c.ProjectID),
+		})
+	}
+
+	// Populate LLM configurations
+	for _, l := range cfg.LLMs {
+		apiKey := strings.TrimSpace(l.APIKey)
+		if apiKey == "" {
+			continue
+		}
+		env.FileLLMs = append(env.FileLLMs, LLMConfig{
+			Provider: strings.TrimSpace(l.Provider),
+			Model:    strings.TrimSpace(l.Model),
+			APIKey:   apiKey,
 		})
 	}
 
