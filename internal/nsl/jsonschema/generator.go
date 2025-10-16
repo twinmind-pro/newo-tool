@@ -65,7 +65,7 @@ func (g *SchemaGenerator) generateSchemaForType(t reflect.Type) (map[string]inte
 	// If it's a struct, check if already processed or add to definitions
 	if t.Kind() == reflect.Struct {
 		if refName, ok := g.processed[t]; ok {
-			return map[string]interface{}{ "$ref": "#/definitions/" + refName }, nil
+			return map[string]interface{}{"$ref": "#/definitions/" + refName}, nil
 		}
 		// Mark as processed and add a placeholder to definitions to handle circular dependencies
 		g.processed[t] = t.Name()
@@ -98,7 +98,7 @@ func (g *SchemaGenerator) generateSchemaForType(t reflect.Type) (map[string]inte
 		schema["properties"] = properties
 		// Update the placeholder with the full schema
 		g.definitions[t.Name()] = schema
-		return map[string]interface{}{ "$ref": "#/definitions/" + t.Name() }, nil
+		return map[string]interface{}{"$ref": "#/definitions/" + t.Name()}, nil
 	}
 
 	// Handle other types directly
@@ -131,6 +131,7 @@ func (g *SchemaGenerator) generateSchemaForType(t reflect.Type) (map[string]inte
 
 	return schema, nil
 }
+
 // ToJSONString converts a schema map to a pretty-printed JSON string.
 func ToJSONString(schema map[string]interface{}) (string, error) {
 	data, err := json.MarshalIndent(schema, "", "  ")

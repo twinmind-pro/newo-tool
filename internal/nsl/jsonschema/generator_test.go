@@ -226,8 +226,3 @@ func TestGenerateComplexSchema(t *testing.T) {
 
 	// t.Logf("Generated IfStatement Schema:\n%s", jsonString) // Uncomment to see the full schema
 }
-
-
-
-
-

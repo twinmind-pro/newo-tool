@@ -459,7 +459,7 @@ func (bs *BlockStatement) String() string {
 // UnmarshalJSON customizes how BlockStatement is unmarshaled from JSON.
 func (bs *BlockStatement) UnmarshalJSON(data []byte) error {
 	var temp struct {
-		Token      json.RawMessage `json:"Token"`
+		Token      json.RawMessage   `json:"Token"`
 		Statements []json.RawMessage `json:"Statements"`
 	}
 	if err := json.Unmarshal(data, &temp); err != nil {
@@ -511,11 +511,11 @@ func (is *IfStatement) String() string {
 // UnmarshalJSON customizes how IfStatement is unmarshaled from JSON.
 func (is *IfStatement) UnmarshalJSON(data []byte) error {
 	var temp struct {
-		Token       json.RawMessage `json:"Token"`
-		Condition   json.RawMessage `json:"Condition"`
-		Consequence json.RawMessage `json:"Consequence"`
+		Token       json.RawMessage   `json:"Token"`
+		Condition   json.RawMessage   `json:"Condition"`
+		Consequence json.RawMessage   `json:"Consequence"`
 		ElseIfs     []json.RawMessage `json:"ElseIfs"`
-		Alternative json.RawMessage `json:"Alternative"`
+		Alternative json.RawMessage   `json:"Alternative"`
 	}
 	if err := json.Unmarshal(data, &temp); err != nil {
 		return err
