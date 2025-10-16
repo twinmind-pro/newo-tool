@@ -4,15 +4,33 @@ GOBIN ?= $(abspath $(BUILD_DIR))
 override LINT := golangci-lint
 override VULNCHECK := govulncheck
 
-.PHONY: build install clean lint test race vuln fmt
+.PHONY: build install clean lint test race vuln fmt release
 
 VERSION := $(shell git describe --tags --always)
 COMMIT := $(shell git rev-parse HEAD)
+TAG := $(shell git describe --tags --abbrev=0)
 
-build: fmt lint
+build:
+	@mkdir -p $(BUILD_DIR)
+	go build -o $(BUILD_DIR)/$(BIN_NAME) ./cmd/newo
+
+release: fmt lint
 	@mkdir -p $(BUILD_DIR)
 	@echo "LDFLAGS: -X 'github.com/twinmind/newo-tool/internal/version.Version=$(VERSION)' -X 'github.com/twinmind/newo-tool/internal/version.Commit=$(COMMIT)'"
 	go build -ldflags "-X 'github.com/twinmind/newo-tool/internal/version.Version=$(VERSION)' -X 'github.com/twinmind/newo-tool/internal/version.Commit=$(COMMIT)'" -o $(BUILD_DIR)/$(BIN_NAME) ./cmd/newo
+
+	@echo "Checking for gh CLI..."
+	@command -v gh >/dev/null 2>&1 || { echo >&2 "gh CLI is not installed. Aborting release creation."; exit 1; }
+
+	@echo "Getting latest tag from remote..."
+
+	@echo "Checking if release for tag $(TAG) already exists..."
+	if gh release view $(TAG) >/dev/null 2>&1; then \
+		echo "Release for tag $(TAG) already exists. Skipping release creation."; \
+	else \
+		echo "Creating GitHub Release for tag $(TAG)..."; \
+		gh release create $(TAG) --title "Release $(TAG)" --notes "Automated release for tag $(TAG)"; \
+	fi
 
 install:
 	@mkdir -p $(GOBIN)
@@ -44,5 +62,5 @@ vuln:
 	}
 
 fmt:
-	@gofmt -w $(shell go list -f '{{.Dir}}' ./...)
+	@gofmt -w $(shell go list -f '{{.Dir}}' ./...) 
 LINT_CACHE ?= $(abspath .golangci-cache)
