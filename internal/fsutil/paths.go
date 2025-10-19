@@ -35,8 +35,8 @@ const (
 // ErrLocked indicates the workspace is already locked by another process.
 var ErrLocked = errors.New("workspace is locked")
 
-// ExportProjectDir returns the root directory for exported project assets.
-func ExportProjectDir(root, projectSlug string) string {
+// ExportProjectRoot returns the root directory for exported project assets.
+func ExportProjectRoot(root, projectSlug string) string {
 	if strings.TrimSpace(root) == "" {
 		root = "."
 	}
@@ -46,34 +46,68 @@ func ExportProjectDir(root, projectSlug string) string {
 	return filepath.Join(root, projectSlug)
 }
 
+// ExportProjectDir returns the root directory for exported project assets, including customer type and customer IDN.
+func ExportProjectDir(root, customerType, customerIDN, projectSlug string) string {
+	if strings.TrimSpace(root) == "" {
+		root = "."
+	}
+	if strings.TrimSpace(customerIDN) == "" {
+		customerIDN = "default_customer" // Fallback if customerIDN is empty
+	}
+	if strings.TrimSpace(projectSlug) == "" {
+		projectSlug = "project"
+	}
+
+	switch strings.ToLower(strings.TrimSpace(customerType)) {
+	case "integration":
+		return filepath.Join(root, projectSlug)
+	case "e2e":
+		return filepath.Join(root+"_e2e", customerIDN, projectSlug)
+	default:
+		return filepath.Join(root, customerIDN, projectSlug)
+	}
+}
+
+
+
 // ExportProjectJSONPath returns the project.json path.
-func ExportProjectJSONPath(root, projectSlug string) string {
-	return filepath.Join(ExportProjectDir(root, projectSlug), ProjectJSON)
+func ExportProjectJSONPath(root, customerType, customerIDN, projectSlug string) string {
+	return filepath.Join(ExportProjectDir(root, customerType, customerIDN, projectSlug), ProjectJSON)
 }
 
 // ExportAttributesPath returns the attributes.yaml path.
-func ExportAttributesPath(root, projectSlug string) string {
-	return filepath.Join(ExportProjectDir(root, projectSlug), AttributesYAML)
+func ExportAttributesPath(root, customerType, customerIDN, projectSlug string) string {
+	return filepath.Join(ExportProjectDir(root, customerType, customerIDN, projectSlug), AttributesYAML)
 }
 
 // ExportFlowsYAMLPath returns the flows.yaml path.
-func ExportFlowsYAMLPath(root, projectSlug string) string {
-	return filepath.Join(ExportProjectDir(root, projectSlug), FlowsYAML)
+func ExportFlowsYAMLPath(root, customerType, customerIDN, projectSlug string) string {
+	return filepath.Join(ExportProjectDir(root, customerType, customerIDN, projectSlug), FlowsYAML)
 }
 
-// ExportFlowDir returns the directory for flow scripts.
-func ExportFlowDir(root, projectSlug, flowIDN string) string {
-	return filepath.Join(ExportProjectDir(root, projectSlug), FlowsDir, flowIDN)
+// ExportFlowDir returns the directory for a flow's assets.
+func ExportFlowDir(root, customerType, customerIDN, projectSlug, agentIDN, flowIDN string) string {
+	baseDir := ExportProjectDir(root, customerType, customerIDN, projectSlug)
+	customerType = strings.ToLower(strings.TrimSpace(customerType))
+	if customerType == "integration" || customerType == "e2e" {
+		return filepath.Join(baseDir, FlowsDir, flowIDN)
+	}
+	return filepath.Join(baseDir, agentIDN, FlowsDir, flowIDN)
+}
+
+// ExportFlowMetadataPath returns the path for a flow's metadata YAML file.
+func ExportFlowMetadataPath(root, customerType, customerIDN, projectSlug, agentIDN, flowIDN string) string {
+	return filepath.Join(ExportFlowDir(root, customerType, customerIDN, projectSlug, agentIDN, flowIDN), MetadataYAML)
 }
 
 // ExportSkillScriptPath returns the path for a skill script under the exported structure.
-func ExportSkillScriptPath(root, projectSlug, flowIDN, fileName string) string {
-	return filepath.Join(ExportFlowDir(root, projectSlug, flowIDN), fileName)
+func ExportSkillScriptPath(root, customerType, customerIDN, projectSlug, agentIDN, flowIDN, fileName string) string {
+	return filepath.Join(ExportFlowDir(root, customerType, customerIDN, projectSlug, agentIDN, flowIDN), fileName)
 }
 
 // ExportSkillMetadataPath returns the path for a skill's metadata YAML file.
-func ExportSkillMetadataPath(root, projectSlug, flowIDN, skillIDN string) string {
-	return filepath.Join(ExportFlowDir(root, projectSlug, flowIDN), fmt.Sprintf("%s%s", skillIDN, SkillMetaFileExt))
+func ExportSkillMetadataPath(root, customerType, customerIDN, projectSlug, agentIDN, flowIDN, skillIDN string) string {
+	return filepath.Join(ExportFlowDir(root, customerType, customerIDN, projectSlug, agentIDN, flowIDN), fmt.Sprintf("%s%s", skillIDN, SkillMetaFileExt))
 }
 
 // CustomerRoot returns the base directory for customer data.
@@ -91,19 +125,19 @@ func CustomerStateDir(customerIDN string) string {
 	return filepath.Join(StateDirName, strings.ToLower(customerIDN))
 }
 
-func ensureDir(path string) error {
+func EnsureDir(path string) error {
 	return os.MkdirAll(path, DirPerm)
 }
 
 // EnsureWorkspace lays out the required directory structure for a customer.
 func EnsureWorkspace(customerIDN string) error {
-	return ensureDir(CustomerStateDir(customerIDN))
+	return EnsureDir(CustomerStateDir(customerIDN))
 }
 
 // EnsureParentDir makes sure the parent directory for a file exists.
 func EnsureParentDir(filePath string) error {
 	dir := filepath.Dir(filePath)
-	return ensureDir(dir)
+	return EnsureDir(dir)
 }
 
 func lockDirectory() string {
@@ -112,7 +146,7 @@ func lockDirectory() string {
 
 // AcquireLock creates a lock file preventing concurrent destructive operations.
 func AcquireLock(operation string) (func() error, error) {
-	if err := ensureDir(lockDirectory()); err != nil {
+	if err := EnsureDir(lockDirectory()); err != nil {
 		return nil, fmt.Errorf("ensure lock directory: %w", err)
 	}
 	lockPath := filepath.Join(lockDirectory(), fmt.Sprintf("%s.lock", operation))

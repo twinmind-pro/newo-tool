@@ -189,7 +189,7 @@ func (c *PushCommand) pushCustomer(ctx context.Context, session *session.Session
 
 	for projectIDN, projectData := range projectMap.Projects {
 		projectSlug := c.projectSlug(projectIDN, projectData)
-		projectDir := fsutil.ExportProjectDir(c.outputRoot, projectSlug)
+		projectDir := fsutil.ExportProjectDir(c.outputRoot, session.CustomerType, session.IDN, projectSlug)
 
 		flowCache := make(map[string]*flowSnapshot)
 		for agentIDN, agentData := range projectData.Agents {

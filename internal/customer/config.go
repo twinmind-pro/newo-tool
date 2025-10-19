@@ -10,9 +10,11 @@ import (
 
 // Entry represents a single customer bootstrap configuration.
 type Entry struct {
-	APIKey    string
-	ProjectID string
-	HintIDN   string
+	APIKey     string
+	ProjectID  string
+	ProjectIDN string // Added to hold per-customer project IDN
+	HintIDN    string
+	Type       string // Added to hold customer type
 }
 
 // Configuration aggregates customer entries and default selection.
@@ -25,27 +27,41 @@ type Configuration struct {
 func FromEnv(env config.Env) (Configuration, error) {
 	var entries []Entry
 
-	if env.APIKeysJSON != "" {
-		parsed, err := parseAPIKeysJSON(env.APIKeysJSON)
-		if err != nil {
-			return Configuration{}, err
+	// First, prioritize customers from the TOML file.
+	if len(env.FileCustomers) > 0 {
+		for _, fileCustomer := range env.FileCustomers {
+			if len(fileCustomer.Projects) == 0 {
+				// This customer has no projects defined in the file.
+				// Ignore them completely to avoid unintended operations.
+				continue
+			}
+			for _, p := range fileCustomer.Projects {
+				entries = append(entries, Entry{
+					APIKey:     fileCustomer.APIKey,
+					ProjectID:  p.ID,
+					ProjectIDN: p.IDN,
+					HintIDN:    fileCustomer.IDN,
+					Type:       fileCustomer.Type,
+				})
+			}
 		}
-		entries = append(entries, parsed...)
-	}
+	} else {
+		// Only if no customers are in the file, fall back to environment variables.
+		if env.APIKeysJSON != "" {
+			parsed, err := parseAPIKeysJSON(env.APIKeysJSON)
+			if err != nil {
+				return Configuration{}, err
+			}
+			entries = append(entries, parsed...)
+		}
 
-	if env.APIKey != "" {
-		entries = append(entries, Entry{
-			APIKey:    env.APIKey,
-			ProjectID: env.ProjectID,
-		})
-	}
-
-	for _, fileCustomer := range env.FileCustomers {
-		entries = append(entries, Entry{
-			APIKey:    fileCustomer.APIKey,
-			ProjectID: fileCustomer.ProjectID,
-			HintIDN:   fileCustomer.IDN,
-		})
+		if env.APIKey != "" {
+			entries = append(entries, Entry{
+				APIKey:     env.APIKey,
+				ProjectID:  env.ProjectID,
+				ProjectIDN: env.ProjectIDN, // Also respect global project_idn
+			})
+		}
 	}
 
 	if len(entries) == 0 {
@@ -87,9 +103,10 @@ func parseAPIKeysJSON(payload string) ([]Entry, error) {
 
 		// Object form with optional metadata.
 		var obj struct {
-			Key       string `json:"key"`
-			ProjectID string `json:"project_id"`
-			IDN       string `json:"idn"`
+			Key        string `json:"key"`
+			ProjectID  string `json:"project_id"`
+			ProjectIDN string `json:"project_idn"`
+			IDN        string `json:"idn"`
 		}
 		if err := json.Unmarshal(item, &obj); err != nil {
 			return nil, fmt.Errorf("NEWO_API_KEYS[%d]: %w", idx, err)
@@ -101,9 +118,10 @@ func parseAPIKeysJSON(payload string) ([]Entry, error) {
 		}
 
 		entries = append(entries, Entry{
-			APIKey:    obj.Key,
-			ProjectID: strings.TrimSpace(obj.ProjectID),
-			HintIDN:   strings.TrimSpace(obj.IDN),
+			APIKey:     obj.Key,
+			ProjectID:  strings.TrimSpace(obj.ProjectID),
+			ProjectIDN: strings.TrimSpace(obj.ProjectIDN),
+			HintIDN:    strings.TrimSpace(obj.IDN),
 		})
 	}
 

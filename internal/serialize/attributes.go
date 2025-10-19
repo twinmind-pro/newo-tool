@@ -22,19 +22,8 @@ type attributeEntry struct {
 }
 
 func GenerateAttributesYAML(attrs []platform.CustomerAttribute) ([]byte, error) {
-	doc := attributesDocument{}
-	for _, attr := range attrs {
-		entry := attributeEntry{
-			IDN:            attr.IDN,
-			Value:          attr.Value,
-			Title:          attr.Title,
-			Description:    attr.Description,
-			Group:          attr.Group,
-			IsHidden:       attr.IsHidden,
-			PossibleValues: attr.PossibleValues,
-			ValueType:      enumWithPrefix("AttributeValueTypes", attr.ValueType),
-		}
-		doc.Attributes = append(doc.Attributes, entry)
+	doc := attributesDocument{
+		Attributes: []attributeEntry{}, // Always generate an empty list
 	}
 	return yaml.Marshal(doc)
 }

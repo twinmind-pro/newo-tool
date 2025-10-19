@@ -9,6 +9,7 @@
 # Local state
 /.newo/
 /newo_customers/
+/docs/
 /integrations/**
 
 # Configuration
@@ -23,4 +24,5 @@
 
 # Gemini
 /GEMINI.md
+/AGENTS.md
 /AST_DEVELOPMENT_PLAN.md

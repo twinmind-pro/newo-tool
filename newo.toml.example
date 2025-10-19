@@ -14,6 +14,9 @@ default_customer = ""
 # The default project UUID to use.
 project_id = ""
 
+# The default project IDN to use.
+project_idn = ""
+
 # You can define multiple customer profiles.
 [[customers]]
 idn = "customer-idn-1"

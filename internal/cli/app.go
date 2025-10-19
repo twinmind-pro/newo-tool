@@ -42,6 +42,7 @@ func New(stdout, stderr io.Writer) *App {
 	app.Register(NewLintCommand(stdout, stderr))
 	app.Register(NewFmtCommand(stdout, stderr))
 	app.Register(NewGenerateCommand(stdout, stderr))
+	app.Register(NewHealthcheckCommand(stdout, stderr))
 
 	return app
 }
