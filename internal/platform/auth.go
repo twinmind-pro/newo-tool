@@ -21,6 +21,21 @@ type TokenResponse struct {
 	ExpiresAt    int64           `json:"expires_at"`
 }
 
+var httpClient = http.DefaultClient
+
+// SetHTTPClientForTesting overrides the HTTP client used by auth helpers. The caller must invoke the returned
+// cleanup function to restore the previous client once the test completes.
+func SetHTTPClientForTesting(client *http.Client) func() {
+	prev := httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	httpClient = client
+	return func() {
+		httpClient = prev
+	}
+}
+
 // ExchangeAPIKeyForToken exchanges an API key for tokens.
 func ExchangeAPIKeyForToken(ctx context.Context, baseURL, apiKey string) (TokenResponse, error) {
 	if apiKey == "" {
@@ -40,7 +55,7 @@ func ExchangeAPIKeyForToken(ctx context.Context, baseURL, apiKey string) (TokenR
 	req.Header.Set("x-api-key", apiKey)
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return TokenResponse{}, fmt.Errorf("exchange api key: %w", err)
 	}
@@ -90,7 +105,7 @@ func RefreshAccessToken(ctx context.Context, refreshURL, refreshToken string) (T
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return TokenResponse{}, fmt.Errorf("refresh access token: %w", err)
 	}

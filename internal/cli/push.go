@@ -190,7 +190,6 @@ func (c *PushCommand) pushCustomer(ctx context.Context, session *session.Session
 	for projectIDN, projectData := range projectMap.Projects {
 		projectSlug := c.projectSlug(projectIDN, projectData)
 
-
 		flowCache := make(map[string]*flowSnapshot)
 		for agentIDN, agentData := range projectData.Agents {
 			for flowIDN, flowData := range agentData.Flows {
@@ -367,8 +366,6 @@ func (c *PushCommand) projectSlug(projectIDN string, data state.ProjectData) str
 	}
 	return strings.ToLower(base)
 }
-
-
 
 func (c *PushCommand) remoteSkillSnapshot(ctx context.Context, client *platform.Client, flowID string, info state.SkillMetadataInfo, cache map[string]*flowSnapshot) (platform.Skill, bool, error) {
 	flowID = strings.TrimSpace(flowID)

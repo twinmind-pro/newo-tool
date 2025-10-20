@@ -18,6 +18,21 @@ const (
 	maxErrorBodyBytes  = 512 << 10
 )
 
+var defaultTransport http.RoundTripper = http.DefaultTransport
+
+// SetTransportForTesting overrides the transport used for outbound HTTP calls. The caller must invoke the returned
+// cleanup function to restore the previous transport when finished.
+func SetTransportForTesting(rt http.RoundTripper) func() {
+	prev := defaultTransport
+	if rt == nil {
+		rt = http.DefaultTransport
+	}
+	defaultTransport = rt
+	return func() {
+		defaultTransport = prev
+	}
+}
+
 // Client wraps HTTP access to the NEWO platform.
 type Client struct {
 	base *url.URL
@@ -52,7 +67,7 @@ func NewClient(baseURL, token string, opts ...ClientOption) (*Client, error) {
 		http: &http.Client{
 			Timeout: defaultHTTPTimeout,
 			Transport: &authTransport{
-				base:  http.DefaultTransport,
+				base:  defaultTransport,
 				token: token,
 			},
 		},
@@ -80,7 +95,7 @@ type authTransport struct {
 
 func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if t.base == nil {
-		t.base = http.DefaultTransport
+		t.base = defaultTransport
 	}
 	req2 := cloneRequest(req)
 	req2.Header.Set("Authorization", "Bearer "+t.token)

@@ -78,23 +78,44 @@ func (c *MergeCommand) RegisterFlags(fs *flag.FlagSet) {
 }
 
 func (c *MergeCommand) Run(ctx context.Context, args []string) error {
-	// Manually separate flags from positional arguments to allow flags to be placed anywhere.
-	var positionalArgs []string
-	var flagArgs []string
-	for _, arg := range args {
-		if strings.HasPrefix(arg, "-") {
-			flagArgs = append(flagArgs, arg)
-		} else {
-			positionalArgs = append(positionalArgs, arg)
-		}
+	prevTarget := ""
+	if c.targetCustomerIDN != nil {
+		prevTarget = *c.targetCustomerIDN
+	}
+	prevNoPull := false
+	if c.noPull != nil {
+		prevNoPull = *c.noPull
+	}
+	prevNoPush := false
+	if c.noPush != nil {
+		prevNoPush = *c.noPush
+	}
+	prevForce := false
+	if c.force != nil {
+		prevForce = *c.force
 	}
 
-	// Parse only the flags.
 	fs := flag.NewFlagSet("merge", flag.ContinueOnError)
 	c.RegisterFlags(fs)
-	if err := fs.Parse(flagArgs); err != nil {
+
+	// Preserve any preconfigured flag values (useful in tests that set flags directly on the command).
+	if strings.TrimSpace(prevTarget) != "" {
+		_ = fs.Set("target-customer", prevTarget)
+	}
+	if prevNoPull {
+		_ = fs.Set("no-pull", "true")
+	}
+	if prevNoPush {
+		_ = fs.Set("no-push", "true")
+	}
+	if prevForce {
+		_ = fs.Set("force", "true")
+	}
+	if err := fs.Parse(args); err != nil {
 		return err
 	}
+
+	positionalArgs := fs.Args()
 
 	// Now validate the positional arguments.
 	if len(positionalArgs) != 3 || positionalArgs[1] != "from" {

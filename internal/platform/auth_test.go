@@ -3,14 +3,13 @@ package platform
 import (
 	"context"
 	"net/http"
-	"net/http/httptest"
 	"testing"
+
+	"github.com/twinmind/newo-tool/internal/testutil/httpmock"
 )
 
 func TestExchangeAPIKeyForToken(t *testing.T) {
-	t.Parallel()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/auth/api-key/token" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -19,10 +18,11 @@ func TestExchangeAPIKeyForToken(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"access_token":"abc","refresh_token":"ref","expires_in":5}`))
-	}))
-	t.Cleanup(srv.Close)
+	})
+	client, _ := httpmock.New(handler)
+	t.Cleanup(SetHTTPClientForTesting(client))
 
-	tokens, err := ExchangeAPIKeyForToken(context.Background(), srv.URL, "test-key")
+	tokens, err := ExchangeAPIKeyForToken(context.Background(), httpmock.BaseURL, "test-key")
 	if err != nil {
 		t.Fatalf("ExchangeAPIKeyForToken: %v", err)
 	}
@@ -35,18 +35,17 @@ func TestExchangeAPIKeyForToken(t *testing.T) {
 }
 
 func TestRefreshAccessToken(t *testing.T) {
-	t.Parallel()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Fatalf("method: %s", r.Method)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"access_token":"new","expires_at":0}`))
-	}))
-	t.Cleanup(srv.Close)
+	})
+	client, _ := httpmock.New(handler)
+	t.Cleanup(SetHTTPClientForTesting(client))
 
-	tokens, err := RefreshAccessToken(context.Background(), srv.URL, "refresh")
+	tokens, err := RefreshAccessToken(context.Background(), httpmock.BaseURL+"/api/v1/auth/refresh", "refresh")
 	if err != nil {
 		t.Fatalf("RefreshAccessToken: %v", err)
 	}
@@ -56,14 +55,13 @@ func TestRefreshAccessToken(t *testing.T) {
 }
 
 func TestExchangeAPIKeyForTokenHTTPError(t *testing.T) {
-	t.Parallel()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "fail", http.StatusBadRequest)
-	}))
-	t.Cleanup(srv.Close)
+	})
+	client, _ := httpmock.New(handler)
+	t.Cleanup(SetHTTPClientForTesting(client))
 
-	if _, err := ExchangeAPIKeyForToken(context.Background(), srv.URL, "key"); err == nil {
+	if _, err := ExchangeAPIKeyForToken(context.Background(), httpmock.BaseURL, "key"); err == nil {
 		t.Fatalf("expected error on non-2xx response")
 	}
 }

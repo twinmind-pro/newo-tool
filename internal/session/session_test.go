@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -15,11 +14,13 @@ import (
 	"github.com/twinmind/newo-tool/internal/config"
 	"github.com/twinmind/newo-tool/internal/customer"
 	"github.com/twinmind/newo-tool/internal/fsutil"
+	"github.com/twinmind/newo-tool/internal/platform"
 	"github.com/twinmind/newo-tool/internal/state"
+	"github.com/twinmind/newo-tool/internal/testutil/httpmock"
 )
 
 func TestNewSession(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/api/v1/auth/api-key/token") {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = fmt.Fprintf(w, `{"access_token":"abc","refresh_token":"ref","expires_in":%d}`, int(time.Hour.Seconds()))
@@ -31,8 +32,11 @@ func TestNewSession(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
-	}))
-	t.Cleanup(server.Close)
+	})
+	client, transport := httpmock.New(handler)
+	t.Cleanup(platform.SetHTTPClientForTesting(client))
+	t.Cleanup(platform.SetTransportForTesting(transport))
+	baseURL := httpmock.BaseURL
 
 	t.Run("handles save token error", func(t *testing.T) {
 		// Setup
@@ -50,7 +54,7 @@ func TestNewSession(t *testing.T) {
 		}
 		t.Cleanup(func() { auth.Save = originalSave })
 
-		env := config.Env{BaseURL: server.URL}
+		env := config.Env{BaseURL: baseURL}
 		entry := customer.Entry{APIKey: "test-key"}
 		registry := state.NewAPIKeyRegistry()
 
@@ -84,7 +88,7 @@ func TestNewSession(t *testing.T) {
 		}
 		t.Cleanup(func() { auth.Save = originalSave })
 
-		env := config.Env{BaseURL: server.URL}
+		env := config.Env{BaseURL: baseURL}
 		entry := customer.Entry{APIKey: "test-key"}
 		registry := state.NewAPIKeyRegistry()
 

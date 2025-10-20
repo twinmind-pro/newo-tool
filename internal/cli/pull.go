@@ -298,9 +298,8 @@ func (c *PullCommand) syncCustomer(
 
 	projectLabel := "no projects"
 	if len(pulledProjectIDs) > 0 {
-	
-	
-unique := uniqueStrings(pulledProjectIDs)
+
+		unique := uniqueStrings(pulledProjectIDs)
 		projectLabel = strings.Join(unique, ", ")
 	}
 	_, _ = fmt.Fprintf(c.stdout, "Pull complete for %s (%s)\n", projectLabel, session.IDN)
@@ -492,7 +491,8 @@ func (c *PullCommand) pullFlow(
 	for _, skill := range skills {
 		skill := skill
 		g.Go(func() error {
-			            if err := c.exportSkill(customerType, customerIDN, projectSlug, agent.IDN, flow.IDN, skill, oldHashes, newHashes, force, mu); err != nil {				return fmt.Errorf("export skill script %s: %w", skill.IDN, err)
+			if err := c.exportSkill(customerType, customerIDN, projectSlug, agent.IDN, flow.IDN, skill, oldHashes, newHashes, force, mu); err != nil {
+				return fmt.Errorf("export skill script %s: %w", skill.IDN, err)
 			}
 			if err := c.exportSkillMetadata(customerType, customerIDN, projectSlug, agent.IDN, flow.IDN, skill, oldHashes, newHashes, force, mu); err != nil {
 				return fmt.Errorf("export skill metadata %s: %w", skill.IDN, err)
@@ -538,7 +538,7 @@ func (c *PullCommand) exportFlowMetadata(
 	force bool,
 	mu *sync.Mutex,
 ) error {
-		type flowMetadataYAML struct {
+	type flowMetadataYAML struct {
 		ID                string                `yaml:"id"`
 		IDN               string                `yaml:"idn"`
 		Title             string                `yaml:"title"`

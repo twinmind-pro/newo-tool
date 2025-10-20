@@ -4,24 +4,25 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"testing"
+
+	"github.com/twinmind/newo-tool/internal/testutil/httpmock"
 )
 
-func testClient(t *testing.T, handler http.Handler) (*Client, func()) {
-	srv := httptest.NewServer(handler)
-	client, err := NewClient(srv.URL, "token")
+func testClient(t *testing.T, handler http.Handler) *Client {
+	t.Helper()
+	stubClient, _ := httpmock.New(handler)
+	client, err := NewClient(httpmock.BaseURL, "token", WithHTTPClient(stubClient))
 	if err != nil {
-		srv.Close()
 		t.Fatalf("NewClient: %v", err)
 	}
-	return client, srv.Close
+	return client
 }
 
 func TestClientListProjects(t *testing.T) {
 	t.Parallel()
 
-	client, shutdown := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/designer/projects" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -30,7 +31,6 @@ func TestClientListProjects(t *testing.T) {
 		}
 		_ = json.NewEncoder(w).Encode([]Project{{ID: "1", IDN: "proj"}})
 	}))
-	defer shutdown()
 
 	projects, err := client.ListProjects(context.Background())
 	if err != nil {
@@ -45,7 +45,7 @@ func TestClientUpdateSkill(t *testing.T) {
 	t.Parallel()
 
 	called := false
-	client, shutdown := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPut {
 			t.Fatalf("method: %s", r.Method)
 		}
@@ -55,7 +55,6 @@ func TestClientUpdateSkill(t *testing.T) {
 		called = true
 		w.WriteHeader(http.StatusOK)
 	}))
-	defer shutdown()
 
 	payload := UpdateSkillRequest{ID: "id", PromptScript: "script"}
 	if err := client.UpdateSkill(context.Background(), "id", payload); err != nil {

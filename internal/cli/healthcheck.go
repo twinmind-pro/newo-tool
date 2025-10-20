@@ -37,7 +37,9 @@ func (c *HealthcheckCommand) RegisterFlags(_ *flag.FlagSet) {
 func (c *HealthcheckCommand) Run(ctx context.Context, _ []string) error {
 	var errs []error
 
-	fmt.Fprintln(c.stdout, "Performing health checks...")
+	if _, err := fmt.Fprintln(c.stdout, "Performing health checks..."); err != nil {
+		errs = append(errs, fmt.Errorf("failed to write to stdout: %w", err))
+	}
 
 	// 1. Configuration Loading
 	env, err := config.LoadEnv()
@@ -45,54 +47,80 @@ func (c *HealthcheckCommand) Run(ctx context.Context, _ []string) error {
 		// This is a fatal error, we can't proceed without the environment.
 		return fmt.Errorf("failed to load configuration, cannot proceed with checks: %w", err)
 	}
-	fmt.Fprintln(c.stdout, "  [OK] Configuration loaded")
+	if _, err := fmt.Fprintln(c.stdout, "  [OK] Configuration loaded"); err != nil {
+		errs = append(errs, fmt.Errorf("failed to write to stdout: %w", err))
+	}
 
 	// 2. Configuration Check
 	if err := healthcheck.CheckConfig(); err != nil {
-		fmt.Fprintln(c.stdout, "  [FAIL] Configuration check")
+		if _, err := fmt.Fprintln(c.stdout, "  [FAIL] Configuration check"); err != nil {
+			errs = append(errs, fmt.Errorf("failed to write to stdout: %w", err))
+		}
 		errs = append(errs, fmt.Errorf("configuration check failed: %w", err))
 	} else {
-		fmt.Fprintln(c.stdout, "  [OK] Configuration check")
+		if _, err := fmt.Fprintln(c.stdout, "  [OK] Configuration check"); err != nil {
+			errs = append(errs, fmt.Errorf("failed to write to stdout: %w", err))
+		}
 	}
 
 	// 3. Filesystem Check
 	if err := healthcheck.CheckFilesystem(env); err != nil {
-		fmt.Fprintln(c.stdout, "  [FAIL] Filesystem check")
+		if _, err := fmt.Fprintln(c.stdout, "  [FAIL] Filesystem check"); err != nil {
+			errs = append(errs, fmt.Errorf("failed to write to stdout: %w", err))
+		}
 		errs = append(errs, fmt.Errorf("filesystem check failed: %w", err))
 	} else {
-		fmt.Fprintln(c.stdout, "  [OK] Filesystem check")
+		if _, err := fmt.Fprintln(c.stdout, "  [OK] Filesystem check"); err != nil {
+			errs = append(errs, fmt.Errorf("failed to write to stdout: %w", err))
+		}
 	}
 
 	// 4. Platform Connectivity Check
 	if customerIDN, err := healthcheck.CheckPlatformConnectivity(ctx, env); err != nil {
-		fmt.Fprintln(c.stdout, "  [FAIL] Platform connectivity check")
+		if _, err := fmt.Fprintln(c.stdout, "  [FAIL] Platform connectivity check"); err != nil {
+			errs = append(errs, fmt.Errorf("failed to write to stdout: %w", err))
+		}
 		errs = append(errs, fmt.Errorf("platform connectivity check failed: %w", err))
 	} else {
-		fmt.Fprintf(c.stdout, "  [OK] Platform connectivity (customer: %s)\n", customerIDN)
+		if _, err := fmt.Fprintf(c.stdout, "  [OK] Platform connectivity (customer: %s)\n", customerIDN); err != nil {
+			errs = append(errs, fmt.Errorf("failed to write to stdout: %w", err))
+		}
 	}
 
 	// 5. Local State Check
 	if _, err := healthcheck.CheckLocalState(env); err != nil {
-		fmt.Fprintln(c.stdout, "  [FAIL] Local state check")
+		if _, err := fmt.Fprintln(c.stdout, "  [FAIL] Local state check"); err != nil {
+			errs = append(errs, fmt.Errorf("failed to write to stdout: %w", err))
+		}
 		errs = append(errs, fmt.Errorf("local state check failed: %w", err))
 	} else {
-		fmt.Fprintln(c.stdout, "  [OK] Local state check")
+		if _, err := fmt.Fprintln(c.stdout, "  [OK] Local state check"); err != nil {
+			errs = append(errs, fmt.Errorf("failed to write to stdout: %w", err))
+		}
 	}
 
 	// 6. External Tools Check
 	if err := healthcheck.CheckExternalTools(); err != nil {
-		fmt.Fprintln(c.stdout, "  [FAIL] External tools check")
+		if _, err := fmt.Fprintln(c.stdout, "  [FAIL] External tools check"); err != nil {
+			errs = append(errs, fmt.Errorf("failed to write to stdout: %w", err))
+		}
 		errs = append(errs, fmt.Errorf("external tools check failed: %w", err))
 	} else {
-		fmt.Fprintln(c.stdout, "  [OK] External tools check")
+		if _, err := fmt.Fprintln(c.stdout, "  [OK] External tools check"); err != nil {
+			errs = append(errs, fmt.Errorf("failed to write to stdout: %w", err))
+		}
 	}
 
 	if len(errs) > 0 {
-		fmt.Fprintln(c.stderr, "\nHealth checks completed with errors:")
+		if _, err := fmt.Fprintln(c.stderr, "\nHealth checks completed with errors:"); err != nil {
+			return fmt.Errorf("failed to write to stderr: %w", err)
+		}
 		// Return a single error containing all sub-errors.
 		return errors.Join(errs...)
 	}
 
-	fmt.Fprintln(c.stdout, "\nAll health checks passed successfully.")
+	if _, err := fmt.Fprintln(c.stdout, "\nAll health checks passed successfully."); err != nil {
+		return fmt.Errorf("failed to write to stdout: %w", err)
+	}
 	return nil
 }
