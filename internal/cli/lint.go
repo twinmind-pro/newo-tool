@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
 
 	"github.com/twinmind/newo-tool/internal/linter"
 )
@@ -34,21 +33,12 @@ func (c *LintCommand) RegisterFlags(_ *flag.FlagSet) {
 }
 
 func (c *LintCommand) Run(ctx context.Context, _ []string) error {
-	outputRoot, err := getOutputRoot()
+	outputRoot, err := findTargetDir(c.stdout)
 	if err != nil {
 		return err
 	}
 
-	if outputRoot == "" {
-		outputRoot = "."
-	}
-
 	_, _ = fmt.Fprintf(c.stdout, "Linting .nsl files in %s...\n", outputRoot)
-
-	if _, err := os.Stat(outputRoot); os.IsNotExist(err) {
-		_, _ = fmt.Fprintf(c.stdout, "Directory %q does not exist. Nothing to lint.\n", outputRoot)
-		return nil
-	}
 
 	errors, err := linter.LintNSLFiles(outputRoot)
 	if err != nil {

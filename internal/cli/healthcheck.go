@@ -1,8 +1,8 @@
-
 package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -35,44 +35,64 @@ func (c *HealthcheckCommand) RegisterFlags(_ *flag.FlagSet) {
 }
 
 func (c *HealthcheckCommand) Run(ctx context.Context, _ []string) error {
-	_, _ = fmt.Fprintln(c.stdout, "Loading configuration...")
+	var errs []error
+
+	fmt.Fprintln(c.stdout, "Performing health checks...")
+
+	// 1. Configuration Loading
 	env, err := config.LoadEnv()
 	if err != nil {
-		return fmt.Errorf("[FAIL] Failed to load configuration: %w", err)
+		// This is a fatal error, we can't proceed without the environment.
+		return fmt.Errorf("failed to load configuration, cannot proceed with checks: %w", err)
 	}
-	_, _ = fmt.Fprintln(c.stdout, "[OK] Configuration loaded successfully.")
+	fmt.Fprintln(c.stdout, "  [OK] Configuration loaded")
 
-	_, _ = fmt.Fprintln(c.stdout, "Performing configuration health checks...")
+	// 2. Configuration Check
 	if err := healthcheck.CheckConfig(); err != nil {
-		return fmt.Errorf("  [FAIL] Configuration check failed: %w", err)
+		fmt.Fprintln(c.stdout, "  [FAIL] Configuration check")
+		errs = append(errs, fmt.Errorf("configuration check failed: %w", err))
+	} else {
+		fmt.Fprintln(c.stdout, "  [OK] Configuration check")
 	}
-	_, _ = fmt.Fprintln(c.stdout, "  [OK] Configuration check passed.")
 
-	_, _ = fmt.Fprintln(c.stdout, "Performing filesystem health checks...")
+	// 3. Filesystem Check
 	if err := healthcheck.CheckFilesystem(env); err != nil {
-		return fmt.Errorf("  [FAIL] Filesystem check failed: %w", err)
+		fmt.Fprintln(c.stdout, "  [FAIL] Filesystem check")
+		errs = append(errs, fmt.Errorf("filesystem check failed: %w", err))
+	} else {
+		fmt.Fprintln(c.stdout, "  [OK] Filesystem check")
 	}
-	_, _ = fmt.Fprintln(c.stdout, "  [OK] Filesystem check passed.")
 
-	_, _ = fmt.Fprintln(c.stdout, "Performing platform connectivity health checks...")
-	customerIDN, err := healthcheck.CheckPlatformConnectivity(ctx, env)
-	if err != nil {
-		return fmt.Errorf("  [FAIL] Platform connectivity check failed: %w", err)
+	// 4. Platform Connectivity Check
+	if customerIDN, err := healthcheck.CheckPlatformConnectivity(ctx, env); err != nil {
+		fmt.Fprintln(c.stdout, "  [FAIL] Platform connectivity check")
+		errs = append(errs, fmt.Errorf("platform connectivity check failed: %w", err))
+	} else {
+		fmt.Fprintf(c.stdout, "  [OK] Platform connectivity (customer: %s)\n", customerIDN)
 	}
-	_, _ = fmt.Fprintf(c.stdout, "  [OK] Platform connectivity check passed for customer %s.\n", customerIDN)
 
-	_, _ = fmt.Fprintln(c.stdout, "Performing local state health checks...")
-	customerIDN, err = healthcheck.CheckLocalState(env)
-	if err != nil {
-		return fmt.Errorf("  [FAIL] Local state check failed: %w", err)
+	// 5. Local State Check
+	if _, err := healthcheck.CheckLocalState(env); err != nil {
+		fmt.Fprintln(c.stdout, "  [FAIL] Local state check")
+		errs = append(errs, fmt.Errorf("local state check failed: %w", err))
+	} else {
+		fmt.Fprintln(c.stdout, "  [OK] Local state check")
 	}
-	_, _ = fmt.Fprintf(c.stdout, "  [OK] Local state check passed for customer %s.\n", customerIDN)
 
-	_, _ = fmt.Fprintln(c.stdout, "Performing external tools health checks...")
+	// 6. External Tools Check
 	if err := healthcheck.CheckExternalTools(); err != nil {
-		return fmt.Errorf("  [FAIL] External tools check failed: %w", err)
+		fmt.Fprintln(c.stdout, "  [FAIL] External tools check")
+		errs = append(errs, fmt.Errorf("external tools check failed: %w", err))
+	} else {
+		fmt.Fprintln(c.stdout, "  [OK] External tools check")
 	}
-	_, _ = fmt.Fprintln(c.stdout, "  [OK] External tools check passed.")
-	// TODO: Implement actual health checks
+
+	if len(errs) > 0 {
+		fmt.Fprintln(c.stderr, "\nHealth checks completed with errors:")
+		// Return a single error containing all sub-errors.
+		return errors.Join(errs...)
+	}
+
+	fmt.Fprintln(c.stdout, "\nAll health checks passed successfully.")
 	return nil
 }

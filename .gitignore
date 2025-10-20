@@ -11,6 +11,7 @@
 /newo_customers/
 /docs/
 /integrations/**
+/**_e2e/**
 
 # Configuration
 /newo.toml

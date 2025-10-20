@@ -78,18 +78,34 @@ func (c *MergeCommand) RegisterFlags(fs *flag.FlagSet) {
 }
 
 func (c *MergeCommand) Run(ctx context.Context, args []string) error {
-	if len(args) != 3 || args[1] != "from" {
-		return fmt.Errorf("usage: newo merge <project_idn> from <source_customer_idn>")
+	// Manually separate flags from positional arguments to allow flags to be placed anywhere.
+	var positionalArgs []string
+	var flagArgs []string
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			flagArgs = append(flagArgs, arg)
+		} else {
+			positionalArgs = append(positionalArgs, arg)
+		}
 	}
 
-	projectIDN := strings.TrimSpace(args[0])
-	sourceCustomerIDN := strings.TrimSpace(args[2])
+	// Parse only the flags.
+	fs := flag.NewFlagSet("merge", flag.ContinueOnError)
+	c.RegisterFlags(fs)
+	if err := fs.Parse(flagArgs); err != nil {
+		return err
+	}
+
+	// Now validate the positional arguments.
+	if len(positionalArgs) != 3 || positionalArgs[1] != "from" {
+		return fmt.Errorf("usage: newo merge <project_idn> from <source_customer_idn> [flags]")
+	}
+
+	projectIDN := strings.TrimSpace(positionalArgs[0])
+	sourceCustomerIDN := strings.TrimSpace(positionalArgs[2])
 	if projectIDN == "" || sourceCustomerIDN == "" {
-		return fmt.Errorf("usage: newo merge <project_idn> from <source_customer_idn>")
+		return fmt.Errorf("usage: newo merge <project_idn> from <source_customer_idn> [flags]")
 	}
-
-	*c.projectIDN = projectIDN
-	*c.sourceCustomerIDN = sourceCustomerIDN
 
 	env, err := config.LoadEnv()
 	if err != nil {
