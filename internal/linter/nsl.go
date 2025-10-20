@@ -15,34 +15,24 @@ import (
 	"github.com/twinmind/newo-tool/internal/nsl/parser"
 )
 
-// ANSI escape codes for colors
+type Severity string
+
 const (
-	ColorRed   = "\033[31m"
-	ColorGreen = "\033[32m"
-	ColorReset = "\033[0m"
+	SeverityError   Severity = "error"
+	SeverityWarning Severity = "warning"
 )
 
-// LintError describes a linting error.
+// LintError describes a linting issue.
 type LintError struct {
 	FilePath string
 	Line     int
+	Severity Severity
 	Message  string
+	Snippet  string
 }
 
 func (e LintError) Error() string {
-	// Extract the descriptive part of the message (before the actual line content)
-	messageParts := strings.SplitN(e.Message, ": ", 2)
-	descriptiveMessage := messageParts[0]
-	lineContent := ""
-	if len(messageParts) > 1 {
-		lineContent = messageParts[1]
-	}
-
-	// Format: FilePath:Line: DescriptiveMessage
-	//         [GREEN]  LineContent[RESET]
-	return fmt.Sprintf("%s:%d: %s\n%s  %s%s",
-		e.FilePath, e.Line, descriptiveMessage,
-		ColorGreen, lineContent, ColorReset)
+	return fmt.Sprintf("%s:%d: %s", e.FilePath, e.Line, e.Message)
 }
 
 // LintNSLFiles walks the given root path and lints all .nsl files.
@@ -56,11 +46,18 @@ func LintNSLFiles(root string) ([]LintError, error) {
 		if !d.IsDir() && strings.HasSuffix(d.Name(), ".nsl") {
 			fileErrors, err := lintFile(path)
 			if err != nil {
-				// Continue linting other files
-				errors = append(errors, LintError{FilePath: path, Message: err.Error()})
+				errors = append(errors, LintError{
+					FilePath: filepath.ToSlash(path),
+					Line:     0,
+					Severity: SeverityError,
+					Message:  err.Error(),
+				})
 				return nil
 			}
-			errors = append(errors, fileErrors...)
+			for _, fe := range fileErrors {
+				fe.FilePath = filepath.ToSlash(fe.FilePath)
+				errors = append(errors, fe)
+			}
 		}
 		return nil
 	})
@@ -93,15 +90,19 @@ func lintFile(filePath string) ([]LintError, error) {
 		line := scanner.Text()
 		contentBuilder.WriteString(line + "\n")
 
+		trimmed := strings.TrimSpace(line)
+
 		// Check for Cyrillic characters
 		for _, char := range line {
 			if unicode.Is(unicode.Cyrillic, char) {
 				errors = append(errors, LintError{
 					FilePath: filePath,
 					Line:     lineNumber,
-					Message:  fmt.Sprintf("Line contains Cyrillic characters: %s", line),
+					Severity: SeverityWarning,
+					Message:  "Line contains Cyrillic characters",
+					Snippet:  trimmed,
 				})
-				break // Report only once per line
+				break
 			}
 		}
 
@@ -110,7 +111,9 @@ func lintFile(filePath string) ([]LintError, error) {
 			errors = append(errors, LintError{
 				FilePath: filePath,
 				Line:     lineNumber,
-				Message:  fmt.Sprintf("Line contains an NSL comment: %s", line),
+				Severity: SeverityWarning,
+				Message:  "Line contains an NSL comment",
+				Snippet:  trimmed,
 			})
 		}
 	}
@@ -135,6 +138,7 @@ func lintFile(filePath string) ([]LintError, error) {
 			errors = append(errors, LintError{
 				FilePath: filePath,
 				Line:     1,
+				Severity: SeverityError,
 				Message:  fmt.Sprintf("unbalanced delimiters across file: %s and %s", d.open, d.close),
 			})
 		}
@@ -152,7 +156,12 @@ func lintFile(filePath string) ([]LintError, error) {
 
 		variableErrors, err := checkUndefinedVariables(filePath, program)
 		if err != nil {
-			errors = append(errors, LintError{FilePath: filePath, Message: err.Error()})
+			errors = append(errors, LintError{
+				FilePath: filePath,
+				Line:     0,
+				Severity: SeverityError,
+				Message:  err.Error(),
+			})
 		} else {
 			errors = append(errors, variableErrors...)
 		}
@@ -189,7 +198,8 @@ func checkBlockTermination(content, filePath string) []LintError {
 			if len(stack) == 0 {
 				return []LintError{{
 					FilePath: filePath,
-					Line:     1, // Line number is hard to get with regex on whole file, default to 1
+					Line:     1,
+					Severity: SeverityError,
 					Message:  fmt.Sprintf("unexpected closing tag: %s", tag),
 				}}
 			}
@@ -197,10 +207,11 @@ func checkBlockTermination(content, filePath string) []LintError {
 				return []LintError{{
 					FilePath: filePath,
 					Line:     1,
+					Severity: SeverityError,
 					Message:  fmt.Sprintf("mismatched closing tag: expected end for %s, but got %s", stack[len(stack)-1], tag),
 				}}
 			}
-			stack = stack[:len(stack)-1] // Pop
+			stack = stack[:len(stack)-1]
 		}
 	}
 
@@ -208,6 +219,7 @@ func checkBlockTermination(content, filePath string) []LintError {
 		return []LintError{{
 			FilePath: filePath,
 			Line:     1,
+			Severity: SeverityError,
 			Message:  fmt.Sprintf("unclosed block(s): %s", strings.Join(stack, ", ")),
 		}}
 	}
