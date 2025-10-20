@@ -61,71 +61,70 @@ func TestPullCommand_ProjectIDNFilter(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Run("pulls only the specified project_idn", func(t *testing.T) {
-		tmp := t.TempDir()
-		originalWD, _ := os.Getwd()
-		if err := os.Chdir(tmp); err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = os.Chdir(originalWD) }()
-
-		// Create newo.toml pointing to the mock server
-		tomlContent := fmt.Sprintf(`
-[defaults]
-base_url = "%s"
-output_root = "."
-
-[[customers]]
-idn = "test-customer"
-api_key = "dummy-key"
-  [[customers.projects]]
-  idn = "project-a"
-`, server.URL)
-		if err := os.WriteFile("newo.toml", []byte(tomlContent), 0o644); err != nil {
-			t.Fatal(err)
-		}
-
-		cmd := NewPullCommand(&bytes.Buffer{}, &bytes.Buffer{})
-		if err := cmd.Run(context.Background(), []string{}); err != nil {
-			t.Fatalf("pull command failed: %v", err)
-		}
-
-		// Check that only project-a was downloaded
-		if _, err := os.Stat("project-a"); os.IsNotExist(err) {
-			t.Error("expected 'project-a' directory to be created, but it was not")
-		}
-		if _, err := os.Stat("project-b"); !os.IsNotExist(err) {
-			t.Error("expected 'project-b' directory not to be created, but it was")
-		}
-
-		// Check that flow metadata was created and contains events
-		flowMetaPath := filepath.Join("project-a", "agent-a", "flows", "flow-a", "metadata.yaml")
-		if _, err := os.Stat(flowMetaPath); os.IsNotExist(err) {
-			t.Fatalf("expected flow metadata file %q to be created, but it was not", flowMetaPath)
-		}
-
-		content, err := os.ReadFile(flowMetaPath)
-		if err != nil {
-			t.Fatalf("failed to read flow metadata file: %v", err)
-		}
-
-		var meta struct {
-			Events []struct {
-				IDN string `yaml:"idn"`
-			} `yaml:"events"`
-		}
-		if err := yaml.Unmarshal(content, &meta); err != nil {
-			t.Fatalf("failed to unmarshal flow metadata: %v", err)
-		}
-
-		if len(meta.Events) != 1 {
-			t.Fatalf("expected 1 event, got %d", len(meta.Events))
-		}
-		if meta.Events[0].IDN != "user_message" {
-			t.Errorf("expected event idn to be 'user_message', got %q", meta.Events[0].IDN)
-		}
-	})
-
+		t.Run("pulls only the specified project_idn", func(t *testing.T) {
+			tmp := t.TempDir()
+			originalWD, _ := os.Getwd()
+			if err := os.Chdir(tmp); err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = os.Chdir(originalWD) }()
+	
+			// Create newo.toml pointing to the mock server
+			tomlContent := fmt.Sprintf(`
+	[defaults]
+	base_url = "%s"
+	output_root = "."
+	
+	[[customers]]
+	idn = "test-customer"
+	api_key = "dummy-key"
+	  [[customers.projects]]
+	    idn = "project-a"
+	`, server.URL)
+			if err := os.WriteFile("newo.toml", []byte(tomlContent), 0o644); err != nil {
+				t.Fatal(err)
+			}
+	
+			cmd := NewPullCommand(&bytes.Buffer{}, &bytes.Buffer{})
+			if err := cmd.Run(context.Background(), []string{}); err != nil {
+				t.Fatalf("pull command failed: %v", err)
+			}
+	
+			// Check that only project-a was downloaded
+			if _, err := os.Stat(filepath.Join("test-customer", "project-a")); os.IsNotExist(err) {
+				t.Errorf("expected 'test-customer/project-a' directory to be created, but it was not")
+			}
+			if _, err := os.Stat(filepath.Join("test-customer", "project-b")); !os.IsNotExist(err) {
+				t.Errorf("expected 'test-customer/project-b' directory not to be created, but it was")
+			}
+	
+			// Check that flow metadata was created and contains events
+			flowMetaPath := filepath.Join("test-customer", "project-a", "agent-a", "flows", "flow-a", "metadata.yaml")
+			if _, err := os.Stat(flowMetaPath); os.IsNotExist(err) {
+				t.Fatalf("expected flow metadata file %q to be created, but it was not", flowMetaPath)
+			}
+	
+			content, err := os.ReadFile(flowMetaPath)
+			if err != nil {
+				t.Fatalf("failed to read flow metadata file: %v", err)
+			}
+	
+			var meta struct {
+				Events []struct {
+					IDN string `yaml:"idn"`
+				} `yaml:"events"`
+			}
+			if err := yaml.Unmarshal(content, &meta); err != nil {
+				t.Fatalf("failed to unmarshal flow metadata: %v", err)
+			}
+	
+			if len(meta.Events) != 1 {
+				t.Fatalf("expected 1 event, got %d", len(meta.Events))
+			}
+			if meta.Events[0].IDN != "user_message" {
+				t.Errorf("expected event idn to be 'user_message', got %q", meta.Events[0].IDN)
+			}
+		})
 	t.Run("returns error if project_idn not found", func(t *testing.T) {
 		tmp := t.TempDir()
 		originalWD, _ := os.Getwd()

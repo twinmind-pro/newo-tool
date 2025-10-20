@@ -25,7 +25,7 @@ func CheckConfig() error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("configuration file '%s' not found. Please create it or ensure it's in the project root directory.", path)
+			return fmt.Errorf("configuration file '%s' not found. Please create it or ensure it's in the project root directory", path)
 		}
 		return fmt.Errorf("failed to read configuration file '%s': %w", path, err)
 	}
@@ -108,7 +108,7 @@ func CheckPlatformConnectivity(ctx context.Context, env config.Env) (string, err
 	if err != nil {
 		return "", fmt.Errorf("failed to connect to base URL '%s': %w", env.BaseURL, err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// 2. Test API key validity and platform connectivity with a lightweight API call.
 	var apiKeysToTest []apiKeyEntry
@@ -126,7 +126,7 @@ func CheckPlatformConnectivity(ctx context.Context, env config.Env) (string, err
 	}
 
 	if len(apiKeysToTest) == 0 {
-		return "", fmt.Errorf("API key is not set in configuration (NEWO_API_KEY or customer.api_key). Cannot check platform connectivity.")
+		return "", fmt.Errorf("API key is not set in configuration (NEWO_API_KEY or customer.api_key). Cannot check platform connectivity")
 	}
 
 	var lastErr error
@@ -172,7 +172,7 @@ func CheckLocalState(env config.Env) (string, error) {
 	}
 
 	if len(customerIDNsToTest) == 0 {
-		return "", fmt.Errorf("default customerIDN is not specified in configuration (defaults.default_customer or NEWO_DEFAULT_CUSTOMER), and no customers with defined IDNs in newo.toml. Cannot check local state.")
+		return "", fmt.Errorf("default customerIDN is not specified in configuration (defaults.default_customer or NEWO_DEFAULT_CUSTOMER), and no customers with defined IDNs in newo.toml. Cannot check local state")
 	}
 
 	var lastErr error

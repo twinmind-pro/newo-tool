@@ -157,23 +157,25 @@ type TomlConfig struct {
 }
 
 func validateCustomers(customers []FileCustomer) error {
-	integrationProjectIDNs := make(map[string]string) // Map to store idn -> customer.IDN
+	projectIDNs := make(map[string]string) // Map to store idn -> customer.IDN
 
 	for _, c := range customers {
-		if c.Type != "integration" {
+		// Allow multiple integration customers to have the same project IDN
+		// The merge command will handle the ambiguity.
+		if c.Type == "integration" {
 			continue
 		}
 
 		for _, p := range c.Projects {
-			if ownerIDN, exists := integrationProjectIDNs[p.IDN]; exists {
+			if ownerIDN, exists := projectIDNs[p.IDN]; exists {
 				return fmt.Errorf(
-					"project IDN collision: project '%s' is defined for both customer '%s' and customer '%s' with type 'integration'",
+					"project IDN collision: project '%s' is defined for both customer '%s' and customer '%s'",
 					p.IDN,
 					ownerIDN,
 					c.IDN,
 				)
 			}
-			integrationProjectIDNs[p.IDN] = c.IDN
+			projectIDNs[p.IDN] = c.IDN
 		}
 	}
 	return nil

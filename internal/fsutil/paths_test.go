@@ -6,8 +6,8 @@ import (
 )
 
 func TestExportProjectDirDefaults(t *testing.T) {
-	dir := ExportProjectDir("", "")
-	if dir != "project" {
+	dir := ExportProjectDir("", "default", "default_customer", "project")
+	if dir != "default_customer/project" { // Updated expected value
 		t.Fatalf("unexpected path: %q", dir)
 	}
 }

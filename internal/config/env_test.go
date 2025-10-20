@@ -92,7 +92,7 @@ func TestTomlLoading(t *testing.T) {
 			},
 		},
 		{
-			name: "error: project idn collision",
+			name: "success: project idn collision allowed for integration types",
 			tomlContent: `
 [[customers]]
   idn = "CUST1"
@@ -107,30 +107,30 @@ func TestTomlLoading(t *testing.T) {
   type = "integration"
   [[customers.projects]]
     idn = "colliding-project"
-`,
-			wantErr: "project IDN collision: project 'colliding-project' is defined for both customer 'CUST1' and customer 'CUST2' with type 'integration'",
-		},
-		{
-			name: "success: no collision for non-integration types",
-			tomlContent: `
-[[customers]]
-  idn = "CUST1"
-  api_key = "key1"
-  type = "e2e"
-  [[customers.projects]]
-    idn = "non-colliding-project"
-
-[[customers]]
-  idn = "CUST2"
-  api_key = "key2"
-  type = "e2e"
-  [[customers.projects]]
-    idn = "non-colliding-project"
 `,
 			wantCustomers: []FileCustomer{
-				{IDN: "CUST1", APIKey: "key1", Type: "e2e", Projects: []Project{{IDN: "non-colliding-project"}}},
-				{IDN: "CUST2", APIKey: "key2", Type: "e2e", Projects: []Project{{IDN: "non-colliding-project"}}},
+				{IDN: "CUST1", APIKey: "key1", Type: "integration", Projects: []Project{{IDN: "colliding-project"}}},
+				{IDN: "CUST2", APIKey: "key2", Type: "integration", Projects: []Project{{IDN: "colliding-project"}}},
 			},
+		},
+		{
+			name: "error: project idn collision for e2e types",
+			tomlContent: `
+[[customers]]
+  idn = "CUST1"
+  api_key = "key1"
+  type = "e2e"
+  [[customers.projects]]
+    idn = "non-colliding-project"
+
+[[customers]]
+  idn = "CUST2"
+  api_key = "key2"
+  type = "e2e"
+  [[customers.projects]]
+    idn = "non-colliding-project"
+`,
+			wantErr: "project IDN collision: project 'non-colliding-project' is defined for both customer 'CUST1' and customer 'CUST2'",
 		},
 	}
 
