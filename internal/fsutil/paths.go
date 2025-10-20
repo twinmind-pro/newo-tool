@@ -68,8 +68,6 @@ func ExportProjectDir(root, customerType, customerIDN, projectSlug string) strin
 	}
 }
 
-
-
 // ExportProjectJSONPath returns the project.json path.
 func ExportProjectJSONPath(root, customerType, customerIDN, projectSlug string) string {
 	return filepath.Join(ExportProjectDir(root, customerType, customerIDN, projectSlug), ProjectJSON)

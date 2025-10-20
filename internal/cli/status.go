@@ -15,19 +15,31 @@ import (
 	"github.com/twinmind/newo-tool/internal/fsutil"
 	"github.com/twinmind/newo-tool/internal/state"
 	"github.com/twinmind/newo-tool/internal/status"
+	"github.com/twinmind/newo-tool/internal/ui/console"
 )
 
 // StatusCommand reports local workspace changes compared to the last pull.
 type StatusCommand struct {
 	stdout   io.Writer
 	stderr   io.Writer
+	console  *console.Writer
 	verbose  *bool
 	customer *string
 }
 
 // NewStatusCommand constructs a status command.
 func NewStatusCommand(stdout, stderr io.Writer) *StatusCommand {
-	return &StatusCommand{stdout: stdout, stderr: stderr}
+	return &StatusCommand{
+		stdout:  stdout,
+		stderr:  stderr,
+		console: console.New(stdout, stderr),
+	}
+}
+
+func (c *StatusCommand) ensureConsole() {
+	if c.console == nil {
+		c.console = console.New(c.stdout, c.stderr)
+	}
 }
 
 func (c *StatusCommand) Name() string {
@@ -44,6 +56,7 @@ func (c *StatusCommand) RegisterFlags(fs *flag.FlagSet) {
 }
 
 func (c *StatusCommand) Run(ctx context.Context, _ []string) error {
+	c.ensureConsole()
 	verbose := c.verbose != nil && *c.verbose
 	customerFlag := ""
 	if c.customer != nil {
@@ -103,6 +116,7 @@ func (c *StatusCommand) Run(ctx context.Context, _ []string) error {
 			return fmt.Errorf("customer %s not configured or has no local state", targetIDN)
 		}
 
+		c.console.Section(fmt.Sprintf("Status %s", strings.ToUpper(resolved)))
 		_, err := status.Run(resolved, env.OutputRoot, verbose, c.stdout, c.stderr)
 		return err
 	}
@@ -117,13 +131,13 @@ func (c *StatusCommand) Run(ctx context.Context, _ []string) error {
 	}
 
 	if len(targetList) == 0 {
-		_, _ = fmt.Fprintln(c.stdout, "No customers with local state. Run `newo pull` first.")
+		c.console.Info("No customers with local state. Run `newo pull` first.")
 		return nil
 	}
 
 	for idx, idn := range targetList {
 		if len(targetList) > 1 {
-			_, _ = fmt.Fprintf(c.stdout, "\n== %s (%d/%d) ==\n", idn, idx+1, len(targetList))
+			c.console.Section(fmt.Sprintf("%s (%d/%d)", strings.ToUpper(idn), idx+1, len(targetList)))
 		}
 		if _, err := status.Run(idn, env.OutputRoot, verbose, c.stdout, c.stderr); err != nil {
 			return err

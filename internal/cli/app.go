@@ -11,8 +11,6 @@ import (
 	"sort"
 )
 
-
-
 // App coordinates CLI command registration and execution.
 type App struct {
 	commands map[string]Command

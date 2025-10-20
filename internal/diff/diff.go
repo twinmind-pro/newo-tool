@@ -3,6 +3,7 @@ package diff
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
@@ -38,49 +39,59 @@ func Format(path string, lines []Line) string {
 		return ""
 	}
 
+	firstLocal, firstRemote := headerLineNumbers(lines)
+	header := fmt.Sprintf("diff %s (@@ -%d +%d @@)", path, firstLocal, firstRemote)
+
+	type row struct {
+		displayNumber string
+		plainNumber   string
+		displayText   string
+		plainText     string
+	}
+
+	rows := make([]row, 0, len(lines))
+	for _, line := range lines {
+		displayNumber, plainNumber := formatLineNumber(line)
+		displayText, plainText := formatLineText(line)
+		rows = append(rows, row{
+			displayNumber: displayNumber,
+			plainNumber:   plainNumber,
+			displayText:   displayText,
+			plainText:     plainText,
+		})
+	}
+
+	col1Width := 0
+	col2Width := 0
+	for _, r := range rows {
+		if l := visibleLength(r.plainNumber); l > col1Width {
+			col1Width = l
+		}
+		if l := visibleLength(r.plainText); l > col2Width {
+			col2Width = l
+		}
+	}
+	if col1Width < 2 {
+		col1Width = 2
+	}
+
+	tableWidth := col1Width + col2Width + 7
+	headerInnerWidth := tableWidth - 4
+	if headerLen := visibleLength(header); headerLen > headerInnerWidth {
+		col2Width += headerLen - headerInnerWidth
+		tableWidth = col1Width + col2Width + 7
+		headerInnerWidth = tableWidth - 4
+	}
+
 	var builder strings.Builder
-
-	firstLocal, firstRemote := 0, 0
-	for _, line := range lines {
-		switch line.Kind {
-		case "context":
-			if firstLocal == 0 {
-				firstLocal = line.LocalLine
-			}
-			if firstRemote == 0 {
-				firstRemote = line.RemoteLine
-			}
-		case "del":
-			if firstLocal == 0 {
-				firstLocal = line.LocalLine
-			}
-		case "add":
-			if firstRemote == 0 {
-				firstRemote = line.RemoteLine
-			}
-		}
-		if firstLocal != 0 && firstRemote != 0 {
-			break
-		}
+	topBorder := buildBorderLine(col1Width, col2Width)
+	builder.WriteString(topBorder)
+	builder.WriteString(buildHeaderLine(header, headerInnerWidth))
+	builder.WriteString(topBorder)
+	for _, r := range rows {
+		builder.WriteString(buildDataLine(r.displayNumber, r.plainNumber, col1Width, true, r.displayText, r.plainText, col2Width))
 	}
-	if firstLocal == 0 {
-		firstLocal = 1
-	}
-	if firstRemote == 0 {
-		firstRemote = 1
-	}
-
-	builder.WriteString(fmt.Sprintf("  diff %s (@@ -%d +%d @@):\n", path, firstLocal, firstRemote))
-	for _, line := range lines {
-		switch line.Kind {
-		case "context":
-			builder.WriteString(fmt.Sprintf("    %4d | %s\n", line.LocalLine, line.Text))
-		case "del":
-			builder.WriteString(fmt.Sprintf("  %s-%4d | %s%s\n", redColor, line.LocalLine, line.Text, resetColor))
-		case "add":
-			builder.WriteString(fmt.Sprintf("  %s+%4d | %s%s\n", greenColor, line.RemoteLine, line.Text, resetColor))
-		}
-	}
+	builder.WriteString(topBorder)
 	return builder.String()
 }
 
@@ -195,4 +206,118 @@ func looksBinary(data []byte) bool {
 		}
 	}
 	return false
+}
+
+func headerLineNumbers(lines []Line) (int, int) {
+	firstLocal, firstRemote := 0, 0
+	for _, line := range lines {
+		switch line.Kind {
+		case "context":
+			if firstLocal == 0 && line.LocalLine > 0 {
+				firstLocal = line.LocalLine
+			}
+			if firstRemote == 0 && line.RemoteLine > 0 {
+				firstRemote = line.RemoteLine
+			}
+		case "del":
+			if firstLocal == 0 && line.LocalLine > 0 {
+				firstLocal = line.LocalLine
+			}
+		case "add":
+			if firstRemote == 0 && line.RemoteLine > 0 {
+				firstRemote = line.RemoteLine
+			}
+		}
+		if firstLocal != 0 && firstRemote != 0 {
+			break
+		}
+	}
+	if firstLocal == 0 {
+		firstLocal = 1
+	}
+	if firstRemote == 0 {
+		firstRemote = 1
+	}
+	return firstLocal, firstRemote
+}
+
+func formatLineNumber(line Line) (display string, plain string) {
+	switch line.Kind {
+	case "del":
+		plain = fmt.Sprintf("-%d", line.LocalLine)
+		display = fmt.Sprintf("%s-%d%s", redColor, line.LocalLine, resetColor)
+	case "add":
+		plain = fmt.Sprintf("+%d", line.RemoteLine)
+		display = fmt.Sprintf("%s+%d%s", greenColor, line.RemoteLine, resetColor)
+	default:
+		n := line.LocalLine
+		if n == 0 {
+			n = line.RemoteLine
+		}
+		plain = fmt.Sprintf("%d", n)
+		display = plain
+	}
+	return display, plain
+}
+
+func formatLineText(line Line) (display string, plain string) {
+	switch line.Kind {
+	case "del":
+		return fmt.Sprintf("%s%s%s", redColor, line.Text, resetColor), line.Text
+	case "add":
+		return fmt.Sprintf("%s%s%s", greenColor, line.Text, resetColor), line.Text
+	default:
+		return line.Text, line.Text
+	}
+}
+
+func buildBorderLine(col1Width, col2Width int) string {
+	var builder strings.Builder
+	builder.WriteString("  +")
+	builder.WriteString(strings.Repeat("-", col1Width+2))
+	builder.WriteString("+")
+	builder.WriteString(strings.Repeat("-", col2Width+2))
+	builder.WriteString("+\n")
+	return builder.String()
+}
+
+func buildHeaderLine(header string, innerWidth int) string {
+	padding := innerWidth - visibleLength(header)
+	if padding < 0 {
+		padding = 0
+	}
+	leftPad := padding / 2
+	rightPad := padding - leftPad
+	var builder strings.Builder
+	builder.WriteString("  | ")
+	builder.WriteString(strings.Repeat(" ", leftPad))
+	builder.WriteString(header)
+	builder.WriteString(strings.Repeat(" ", rightPad))
+	builder.WriteString(" |\n")
+	return builder.String()
+}
+
+func buildDataLine(displayNumber, plainNumber string, widthNumber int, alignRight bool, displayText, plainText string, widthText int) string {
+	var builder strings.Builder
+	builder.WriteString("  | ")
+	builder.WriteString(padANSI(displayNumber, plainNumber, widthNumber, alignRight))
+	builder.WriteString(" | ")
+	builder.WriteString(padANSI(displayText, plainText, widthText, false))
+	builder.WriteString(" |\n")
+	return builder.String()
+}
+
+func padANSI(display, plain string, width int, alignRight bool) string {
+	pad := width - visibleLength(plain)
+	if pad < 0 {
+		pad = 0
+	}
+	if alignRight {
+		return strings.Repeat(" ", pad) + display
+	}
+	return display + strings.Repeat(" ", pad)
+}
+
+func visibleLength(s string) int {
+	return utf8.RuneCountInString(s)
 }

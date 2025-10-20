@@ -3,15 +3,16 @@ package cli
 import (
 	"context"
 	"flag"
-	"fmt"
 	"io"
 
+	"github.com/twinmind/newo-tool/internal/ui/console"
 	"github.com/twinmind/newo-tool/internal/version"
 )
 
 // VersionCommand prints the application's version details.
 type VersionCommand struct {
-	writer io.Writer
+	writer  io.Writer
+	console *console.Writer
 }
 
 func (c *VersionCommand) Name() string {
@@ -25,6 +26,11 @@ func (c *VersionCommand) Summary() string {
 func (c *VersionCommand) RegisterFlags(_ *flag.FlagSet) {}
 
 func (c *VersionCommand) Run(ctx context.Context, _ []string) error {
-	_, err := fmt.Fprintf(c.writer, "version: %s\ncommit: %s\n", version.Version, version.Commit)
-	return err
+	if c.console == nil {
+		c.console = console.New(c.writer, c.writer)
+	}
+	c.console.Section("Version")
+	c.console.Info("version: %s", version.Version)
+	c.console.Info("commit: %s", version.Commit)
+	return nil
 }

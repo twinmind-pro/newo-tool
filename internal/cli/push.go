@@ -7,25 +7,24 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/twinmind/newo-tool/internal/config"
 	"github.com/twinmind/newo-tool/internal/customer"
 	"github.com/twinmind/newo-tool/internal/diff"
 	"github.com/twinmind/newo-tool/internal/fsutil"
-	"github.com/twinmind/newo-tool/internal/platform"
 	"github.com/twinmind/newo-tool/internal/session"
 	"github.com/twinmind/newo-tool/internal/state"
-	"github.com/twinmind/newo-tool/internal/util"
+	skillsync "github.com/twinmind/newo-tool/internal/sync"
+	"github.com/twinmind/newo-tool/internal/ui/console"
 )
 
 // PushCommand uploads local script changes to the NEWO platform.
 type PushCommand struct {
 	stdout    io.Writer
 	stderr    io.Writer
+	console   *console.Writer
 	verbose   *bool
 	customer  *string
 	noPublish *bool
@@ -37,7 +36,17 @@ type PushCommand struct {
 
 // NewPushCommand constructs a push command.
 func NewPushCommand(stdout, stderr io.Writer) *PushCommand {
-	return &PushCommand{stdout: stdout, stderr: stderr}
+	return &PushCommand{
+		stdout:  stdout,
+		stderr:  stderr,
+		console: console.New(stdout, stderr),
+	}
+}
+
+func (c *PushCommand) ensureConsole() {
+	if c.console == nil {
+		c.console = console.New(c.stdout, c.stderr)
+	}
 }
 
 func (c *PushCommand) Name() string {
@@ -56,6 +65,7 @@ func (c *PushCommand) RegisterFlags(fs *flag.FlagSet) {
 }
 
 func (c *PushCommand) Run(ctx context.Context, args []string) error {
+	c.ensureConsole()
 	if len(args) > 0 {
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(args, " "))
 	}
@@ -95,7 +105,7 @@ func (c *PushCommand) Run(ctx context.Context, args []string) error {
 	}
 	defer func() {
 		if err := releaseLock(); err != nil && verbose {
-			_, _ = fmt.Fprintf(c.stderr, "warning: release lock: %v\n", err)
+			c.console.Warn("Release lock: %v", err)
 		}
 	}()
 
@@ -141,7 +151,7 @@ func (c *PushCommand) Run(ctx context.Context, args []string) error {
 	}
 
 	if len(processed) == 0 {
-		_, _ = fmt.Fprintln(c.stdout, "No customers matched the selection. Run `newo pull` first to initialise state.")
+		c.console.Info("No customers matched the selection. Run `newo pull` first to initialise state.")
 	}
 
 	if registryDirty {
@@ -154,201 +164,145 @@ func (c *PushCommand) Run(ctx context.Context, args []string) error {
 }
 
 func (c *PushCommand) pushCustomer(ctx context.Context, session *session.Session, shouldPublish bool, verbose bool, force bool) error {
+	c.ensureConsole()
+	if verbose {
+		c.console.Section(fmt.Sprintf("Push %s", session.IDN))
+	}
+
 	projectMap, err := state.LoadProjectMap(session.IDN)
 	if err != nil {
 		return err
 	}
 	if len(projectMap.Projects) == 0 {
-		_, _ = fmt.Fprintf(c.stdout, "No project map for %s. Run `newo pull --customer %s` first.\n", session.IDN, session.IDN)
+		c.console.Info("No project map for %s. Run `newo pull --customer %s` first.", session.IDN, session.IDN)
 		return nil
 	}
 
-	oldHashes, err := state.LoadHashes(session.IDN)
+	hashes, err := state.LoadHashes(session.IDN)
 	if err != nil {
 		return err
 	}
-	if len(oldHashes) == 0 {
-		_, _ = fmt.Fprintf(c.stdout, "No hash snapshot for %s. Run `newo pull --customer %s` to initialise tracking.\n", session.IDN, session.IDN)
+	if len(hashes) == 0 {
+		c.console.Info("No hash snapshot for %s. Run `newo pull --customer %s` to initialise tracking.", session.IDN, session.IDN)
 		return nil
 	}
 
-	newHashes := make(state.HashStore, len(oldHashes))
-	for path, hash := range oldHashes {
-		newHashes[path] = hash
+	service := skillsync.NewSkillSyncService(session.Client, nil)
+	reporter := consoleReporter{writer: c.console}
+
+	result, err := service.SyncCustomer(ctx, skillsync.SkillSyncRequest{
+		SessionIDN:    session.IDN,
+		CustomerType:  session.CustomerType,
+		OutputRoot:    c.outputRoot,
+		ProjectMap:    &projectMap,
+		Hashes:        hashes,
+		ShouldPublish: shouldPublish,
+		Verbose:       verbose,
+		Force:         force,
+		Reporter:      reporter,
+		ProjectSlugger: func(projectIDN string, data state.ProjectData) string {
+			return c.projectSlug(projectIDN, data)
+		},
+		ConfirmPush:     c.confirmSkillUpdate,
+		ConfirmDeletion: c.confirmSkillRemoval,
+	})
+	if err != nil {
+		return err
 	}
 
-	type publishTarget struct {
-		projectIDN string
-		agentIDN   string
-		flowIDN    string
+	if result.Force && c.force != nil {
+		*c.force = true
 	}
 
-	flowsToPublish := map[string]publishTarget{}
-	var errs []error
-	updatedSkills := 0
-
-	for projectIDN, projectData := range projectMap.Projects {
-		projectSlug := c.projectSlug(projectIDN, projectData)
-
-
-		flowCache := make(map[string]*flowSnapshot)
-		for agentIDN, agentData := range projectData.Agents {
-			for flowIDN, flowData := range agentData.Flows {
-				for skillIDN, skillInfo := range flowData.Skills {
-					entry := skillInfo
-					flowData.Skills[skillIDN] = entry
-
-					ext := platform.ScriptExtension(skillInfo.RunnerType)
-					fileName := fmt.Sprintf("%s.%s", skillIDN, ext)
-					scriptPath := fsutil.ExportSkillScriptPath(c.outputRoot, session.CustomerType, session.IDN, projectSlug, agentIDN, flowIDN, fileName)
-					normalized := filepath.ToSlash(scriptPath)
-
-					oldHash, tracked := oldHashes[normalized]
-					content, readErr := os.ReadFile(scriptPath)
-					if readErr != nil {
-						if errors.Is(readErr, os.ErrNotExist) {
-							_, _ = fmt.Fprintf(c.stderr, "skipping %s: file not found; run `newo pull` to resynchronise\n", normalized)
-							continue
-						}
-						errs = append(errs, fmt.Errorf("read %s: %w", normalized, readErr))
-						continue
-					}
-
-					if strings.TrimSpace(skillInfo.ID) == "" {
-						_, _ = fmt.Fprintf(c.stderr, "skipping %s: missing remote skill identifier; run `newo pull`\n", normalized)
-						continue
-					}
-
-					localScript := string(content)
-
-					remoteSkill, found, remoteErr := c.remoteSkillSnapshot(ctx, session.Client, flowData.ID, skillInfo, flowCache)
-					if remoteErr != nil {
-						errs = append(errs, fmt.Errorf("verify remote skill %s: %w", normalized, remoteErr))
-						continue
-					}
-					if !found {
-						_, _ = fmt.Fprintf(c.stderr, "skipping %s: remote skill not found; run `newo pull`\n", normalized)
-						errs = append(errs, fmt.Errorf("remote skill missing for %s", normalized))
-						continue
-					}
-
-					remoteScript := remoteSkill.PromptScript
-					remoteHash := util.SHA256String(remoteScript)
-
-					if tracked && oldHash != "" && remoteHash != oldHash {
-						_, _ = fmt.Fprintf(c.stderr, "skipping %s: remote version changed since last pull; run `newo pull`\n", normalized)
-						errs = append(errs, fmt.Errorf("remote changed for %s", normalized))
-						continue
-					}
-
-					currentHash := util.SHA256Bytes(content)
-					if tracked && currentHash == oldHash {
-						continue
-					}
-
-					if !tracked {
-						_, _ = fmt.Fprintf(c.stderr, "skipping %s: not tracked in hashes; run `newo pull` to refresh mapping\n", normalized)
-						continue
-					}
-
-					if !force {
-						lines := diff.Generate([]byte(remoteScript), []byte(localScript), 3)
-						_, _ = fmt.Fprint(c.stdout, diff.Format(normalized, lines))
-
-						_, _ = fmt.Fprintf(c.stdout, "Push changes? [y/N]: ")
-						reader := bufio.NewReader(os.Stdin)
-						text, _ := reader.ReadString('\n')
-						if strings.TrimSpace(strings.ToLower(text)) != "y" {
-							_, _ = fmt.Fprintf(c.stdout, "Skipping.\n")
-							continue
-						}
-					}
-
-					if verbose {
-						_, _ = fmt.Fprintf(c.stdout, "→ Updating skill %s/%s/%s\n", projectIDN, flowIDN, skillIDN)
-					}
-
-					if err := c.pushSkill(ctx, session.Client, remoteSkill, skillInfo, localScript); err != nil {
-						errs = append(errs, fmt.Errorf("push skill %s: %w", normalized, err))
-						continue
-					}
-
-					// Optimistically update the hash assuming the push was successful.
-					newHashes[normalized] = currentHash
-					updatedSkills++
-
-					delete(flowCache, flowData.ID)
-
-					if shouldPublish && strings.TrimSpace(flowData.ID) != "" {
-						flowsToPublish[flowData.ID] = publishTarget{
-							projectIDN: projectIDN,
-							agentIDN:   agentIDN,
-							flowIDN:    flowIDN,
-						}
-					}
-				}
-
-				agentData.Flows[flowIDN] = flowData
-			}
-
-			projectData.Agents[agentIDN] = agentData
-		}
-
-		projectMap.Projects[projectIDN] = projectData
-	}
-
-	if updatedSkills == 0 && len(errs) == 0 {
-		_, _ = fmt.Fprintf(c.stdout, "No changes to push for %s.\n", session.IDN)
+	if result.Updated == 0 && result.Removed == 0 && result.Created == 0 {
+		c.console.Info("No changes to push for %s.", session.IDN)
 		return nil
 	}
 
-	if updatedSkills > 0 {
+	if result.Updated > 0 {
 		if verbose {
-			_, _ = fmt.Fprintf(c.stdout, "Updated %d skill(s) for %s\n", updatedSkills, session.IDN)
+			c.console.Success("Updated %d skill(s) for %s", result.Updated, session.IDN)
 		} else {
-			_, _ = fmt.Fprintf(c.stdout, "Push complete for %s (%d skill(s) updated)\n", session.IDN, updatedSkills)
-		}
-
-		if err := state.SaveProjectMap(session.IDN, projectMap); err != nil {
-			errs = append(errs, fmt.Errorf("save project map: %w", err))
-		}
-
-		if err := state.SaveHashes(session.IDN, newHashes); err != nil {
-			errs = append(errs, fmt.Errorf("save hashes: %w", err))
-		}
-
-		if shouldPublish && len(flowsToPublish) > 0 {
-			if verbose {
-				_, _ = fmt.Fprintf(c.stdout, "Publishing %d flow(s) for %s\n", len(flowsToPublish), session.IDN)
-			}
-			for flowID, meta := range flowsToPublish {
-				if err := session.Client.PublishFlow(ctx, flowID, defaultPublishRequest()); err != nil {
-					errs = append(errs, fmt.Errorf("publish flow %s/%s/%s: %w", meta.projectIDN, meta.agentIDN, meta.flowIDN, err))
-				} else if verbose {
-					_, _ = fmt.Fprintf(c.stdout, "   published %s/%s/%s\n", meta.projectIDN, meta.agentIDN, meta.flowIDN)
-				}
-			}
+			c.console.Success("Push complete for %s (%d skill(s) updated)", session.IDN, result.Updated)
 		}
 	}
-
-	if len(errs) > 0 {
-		return errors.Join(errs...)
+	if result.Removed > 0 {
+		c.console.Success("Removed %d skill(s) for %s", result.Removed, session.IDN)
 	}
+	if result.Created > 0 {
+		c.console.Success("Created %d skill(s) for %s", result.Created, session.IDN)
+	}
+	if shouldPublish && result.Published > 0 && verbose {
+		c.console.Info("Published %d flow(s) for %s", result.Published, session.IDN)
+	}
+
 	return nil
 }
 
-func (c *PushCommand) pushSkill(ctx context.Context, client *platform.Client, remote platform.Skill, meta state.SkillMetadataInfo, script string) error {
-	request := platform.UpdateSkillRequest{
-		ID:           remote.ID,
-		IDN:          choose(meta.IDN, remote.IDN),
-		Title:        choose(meta.Title, remote.Title),
-		PromptScript: script,
-		RunnerType:   choose(meta.RunnerType, remote.RunnerType),
-		Model:        mergeModel(remote.Model, meta.Model),
-		Parameters:   mergeParameters(remote.Parameters, meta.Parameters),
-		Path:         remote.Path,
+func (c *PushCommand) confirmSkillUpdate(req skillsync.ConfirmPushRequest) (skillsync.Decision, error) {
+	c.ensureConsole()
+
+	if len(req.Diff) > 0 {
+		c.console.Write(diff.Format(req.Path, req.Diff))
 	}
-	return client.UpdateSkill(ctx, remote.ID, request)
+
+	c.console.Prompt("Push changes? [y/N/a]: ")
+	reader := bufio.NewReader(os.Stdin)
+	text, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return skillsync.Decision{}, err
+	}
+
+	switch strings.TrimSpace(strings.ToLower(text)) {
+	case "y":
+		return skillsync.Decision{Apply: true}, nil
+	case "a":
+		return skillsync.Decision{Apply: true, ApplyAll: true}, nil
+	default:
+		c.console.Info("Skipping.")
+		return skillsync.Decision{}, nil
+	}
+}
+
+func (c *PushCommand) confirmSkillRemoval(path, skillIDN string) (skillsync.Decision, error) {
+	c.ensureConsole()
+	c.console.Prompt("Skill %s missing locally. Delete remote version %s? [y/N/a]: ", skillIDN, path)
+	reader := bufio.NewReader(os.Stdin)
+	text, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return skillsync.Decision{}, err
+	}
+	switch strings.TrimSpace(strings.ToLower(text)) {
+	case "y":
+		return skillsync.Decision{Apply: true}, nil
+	case "a":
+		return skillsync.Decision{Apply: true, ApplyAll: true}, nil
+	default:
+		c.console.Info("Keeping remote skill.")
+		return skillsync.Decision{}, nil
+	}
+}
+
+type consoleReporter struct {
+	writer *console.Writer
+}
+
+func (r consoleReporter) Infof(format string, args ...any) {
+	if r.writer != nil {
+		r.writer.Info(format, args...)
+	}
+}
+
+func (r consoleReporter) Warnf(format string, args ...any) {
+	if r.writer != nil {
+		r.writer.Warn(format, args...)
+	}
+}
+
+func (r consoleReporter) Successf(format string, args ...any) {
+	if r.writer != nil {
+		r.writer.Success(format, args...)
+	}
 }
 
 func (c *PushCommand) projectSlug(projectIDN string, data state.ProjectData) string {
@@ -366,160 +320,4 @@ func (c *PushCommand) projectSlug(projectIDN string, data state.ProjectData) str
 		return c.slugPrefix + strings.ToLower(base)
 	}
 	return strings.ToLower(base)
-}
-
-
-
-func (c *PushCommand) remoteSkillSnapshot(ctx context.Context, client *platform.Client, flowID string, info state.SkillMetadataInfo, cache map[string]*flowSnapshot) (platform.Skill, bool, error) {
-	flowID = strings.TrimSpace(flowID)
-	id := strings.TrimSpace(info.ID)
-
-	if flowID != "" {
-		if snap, ok := cache[flowID]; ok && snap != nil {
-			if skill, ok := snap.lookup(info); ok {
-				return skill, true, nil
-			}
-		} else if flowID != "" {
-			snap, err := buildFlowSnapshot(ctx, client, flowID)
-			if err != nil {
-				return platform.Skill{}, false, err
-			}
-			cache[flowID] = snap
-			if skill, ok := snap.lookup(info); ok {
-				return skill, true, nil
-			}
-		}
-	}
-
-	if id == "" {
-		return platform.Skill{}, false, nil
-	}
-
-	skill, err := client.GetSkill(ctx, id)
-	if err != nil {
-		var apiErr *platform.APIError
-		if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
-			return platform.Skill{}, false, nil
-		}
-		return platform.Skill{}, false, err
-	}
-
-	if flowID != "" {
-		if snap, ok := cache[flowID]; ok && snap != nil {
-			snap.store(skill)
-		}
-	}
-	return skill, true, nil
-}
-
-func convertParameters(params []map[string]any) []platform.SkillParameter {
-	if len(params) == 0 {
-		return nil
-	}
-	result := make([]platform.SkillParameter, 0, len(params))
-	for _, raw := range params {
-		name, _ := raw["name"].(string)
-		if strings.TrimSpace(name) == "" {
-			continue
-		}
-		value := ""
-		if v, ok := raw["default_value"]; ok && v != nil {
-			value = fmt.Sprint(v)
-		}
-		result = append(result, platform.SkillParameter{
-			Name:         name,
-			DefaultValue: value,
-		})
-	}
-	return result
-}
-
-func defaultPublishRequest() platform.PublishFlowRequest {
-	return platform.PublishFlowRequest{
-		Version:     "1.0",
-		Description: "Published via newo-go CLI",
-		Type:        "public",
-	}
-}
-
-func choose(primary, fallback string) string {
-	if v := strings.TrimSpace(primary); v != "" {
-		return v
-	}
-	return fallback
-}
-
-func mergeModel(remote platform.ModelConfig, override map[string]string) platform.ModelConfig {
-	result := remote
-	if override == nil {
-		return result
-	}
-	if v := strings.TrimSpace(override["model_idn"]); v != "" {
-		result.ModelIDN = v
-	}
-	if v := strings.TrimSpace(override["provider_idn"]); v != "" {
-		result.ProviderIDN = v
-	}
-	return result
-}
-
-func mergeParameters(remote []platform.SkillParameter, override []map[string]any) []platform.SkillParameter {
-	if len(override) > 0 {
-		return convertParameters(override)
-	}
-	return remote
-}
-
-type flowSnapshot struct {
-	byID  map[string]platform.Skill
-	byIDN map[string]platform.Skill
-}
-
-func buildFlowSnapshot(ctx context.Context, client *platform.Client, flowID string) (*flowSnapshot, error) {
-	skills, err := client.ListFlowSkills(ctx, flowID)
-	if err != nil {
-		return nil, err
-	}
-	snap := &flowSnapshot{
-		byID:  make(map[string]platform.Skill, len(skills)),
-		byIDN: make(map[string]platform.Skill, len(skills)),
-	}
-	for _, s := range skills {
-		if s.ID != "" {
-			snap.byID[s.ID] = s
-		}
-		if s.IDN != "" {
-			snap.byIDN[strings.ToLower(s.IDN)] = s
-		}
-	}
-	return snap, nil
-}
-
-func (s *flowSnapshot) lookup(info state.SkillMetadataInfo) (platform.Skill, bool) {
-	if s == nil {
-		return platform.Skill{}, false
-	}
-	if info.ID != "" {
-		if skill, ok := s.byID[info.ID]; ok {
-			return skill, true
-		}
-	}
-	if info.IDN != "" {
-		if skill, ok := s.byIDN[strings.ToLower(info.IDN)]; ok {
-			return skill, true
-		}
-	}
-	return platform.Skill{}, false
-}
-
-func (s *flowSnapshot) store(skill platform.Skill) {
-	if s == nil {
-		return
-	}
-	if skill.ID != "" {
-		s.byID[skill.ID] = skill
-	}
-	if skill.IDN != "" {
-		s.byIDN[strings.ToLower(skill.IDN)] = skill
-	}
 }

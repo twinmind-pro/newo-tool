@@ -4,24 +4,26 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/twinmind/newo-tool/internal/testutil/httpmock"
 )
 
-func testClient(t *testing.T, handler http.Handler) (*Client, func()) {
-	srv := httptest.NewServer(handler)
-	client, err := NewClient(srv.URL, "token")
+func testClient(t *testing.T, handler http.Handler) *Client {
+	t.Helper()
+	stubClient, _ := httpmock.New(handler)
+	client, err := NewClient(httpmock.BaseURL, "token", WithHTTPClient(stubClient))
 	if err != nil {
-		srv.Close()
 		t.Fatalf("NewClient: %v", err)
 	}
-	return client, srv.Close
+	return client
 }
 
 func TestClientListProjects(t *testing.T) {
 	t.Parallel()
 
-	client, shutdown := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/designer/projects" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -30,7 +32,6 @@ func TestClientListProjects(t *testing.T) {
 		}
 		_ = json.NewEncoder(w).Encode([]Project{{ID: "1", IDN: "proj"}})
 	}))
-	defer shutdown()
 
 	projects, err := client.ListProjects(context.Background())
 	if err != nil {
@@ -45,7 +46,7 @@ func TestClientUpdateSkill(t *testing.T) {
 	t.Parallel()
 
 	called := false
-	client, shutdown := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPut {
 			t.Fatalf("method: %s", r.Method)
 		}
@@ -55,7 +56,6 @@ func TestClientUpdateSkill(t *testing.T) {
 		called = true
 		w.WriteHeader(http.StatusOK)
 	}))
-	defer shutdown()
 
 	payload := UpdateSkillRequest{ID: "id", PromptScript: "script"}
 	if err := client.UpdateSkill(context.Background(), "id", payload); err != nil {
@@ -63,5 +63,48 @@ func TestClientUpdateSkill(t *testing.T) {
 	}
 	if !called {
 		t.Fatalf("expected handler to be called")
+	}
+}
+
+func TestClientCreateSkill(t *testing.T) {
+	t.Parallel()
+
+	client := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method: %s", r.Method)
+		}
+		if !strings.HasSuffix(r.URL.Path, "/api/v1/designer/flows/flow-123/skills") {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(CreateSkillResponse{ID: "skill-abc"})
+	}))
+
+	resp, err := client.CreateSkill(context.Background(), "flow-123", CreateSkillRequest{
+		IDN:        "new_skill",
+		Title:      "New Skill",
+		RunnerType: "nsl",
+		Model:      ModelConfig{ModelIDN: "gpt4o", ProviderIDN: "openai"},
+	})
+	if err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+	if resp.ID != "skill-abc" {
+		t.Fatalf("unexpected id: %s", resp.ID)
+	}
+}
+
+func TestClientDeleteSkill(t *testing.T) {
+	client := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			t.Fatalf("method: %s", r.Method)
+		}
+		if !strings.HasSuffix(r.URL.Path, "/api/v1/designer/flows/skills/skill-123") {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	if err := client.DeleteSkill(context.Background(), "skill-123"); err != nil {
+		t.Fatalf("DeleteSkill: %v", err)
 	}
 }
