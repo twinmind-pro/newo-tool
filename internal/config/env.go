@@ -15,6 +15,7 @@ import (
 type Env struct {
 	BaseURL             string
 	ProjectID           string
+	ProjectIDN          string // from [defaults] or env
 	APIKey              string
 	APIKeysJSON         string
 	AccessToken         string
@@ -25,14 +26,21 @@ type Env struct {
 	FileDefaultCustomer string
 	OutputRoot          string
 	SlugPrefix          string
-	FileLLMs            []LLMConfig // Added
+	FileLLMs            []LLMConfig
 }
 
 // FileCustomer describes a customer defined in newo.toml.
 type FileCustomer struct {
-	IDN       string
-	APIKey    string
-	ProjectID string
+	IDN      string
+	APIKey   string
+	Type     string
+	Projects []Project
+}
+
+// Project describes a project defined within a customer in newo.toml.
+type Project struct {
+	IDN string `toml:"idn"`
+	ID  string `toml:"id"`
 }
 
 // LLMConfig describes an LLM configuration defined in newo.toml.
@@ -56,6 +64,7 @@ func LoadEnv() (Env, error) {
 	env := Env{
 		BaseURL:         baseURL,
 		ProjectID:       strings.TrimSpace(os.Getenv("NEWO_PROJECT_ID")),
+		ProjectIDN:      strings.TrimSpace(os.Getenv("NEWO_PROJECT_IDN")), // Load from env var
 		APIKey:          strings.TrimSpace(os.Getenv("NEWO_API_KEY")),
 		APIKeysJSON:     strings.TrimSpace(os.Getenv("NEWO_API_KEYS")),
 		AccessToken:     strings.TrimSpace(os.Getenv("NEWO_ACCESS_TOKEN")),
@@ -124,7 +133,7 @@ const (
 	DefaultTomlPath      = "newo.toml"
 )
 
-type tomlConfig struct {
+type TomlConfig struct {
 	Defaults struct {
 		OutputRoot         *string `toml:"output_root"`
 		SlugPrefix         string  `toml:"slug_prefix"`
@@ -132,17 +141,44 @@ type tomlConfig struct {
 		BaseURL            string  `toml:"base_url"`
 		DefaultCustomerIDN string  `toml:"default_customer"`
 		ProjectID          string  `toml:"project_id"`
+		ProjectIDN         string  `toml:"project_idn"`
 	} `toml:"defaults"`
 	Customers []struct {
-		IDN       string `toml:"idn"`
-		APIKey    string `toml:"api_key"`
-		ProjectID string `toml:"project_id"`
+		IDN      string    `toml:"idn"`
+		APIKey   string    `toml:"api_key"`
+		Type     string    `toml:"type"`
+		Projects []Project `toml:"projects"`
 	} `toml:"customers"`
 	LLMs []struct {
 		Provider string `toml:"provider"`
 		Model    string `toml:"model"`
 		APIKey   string `toml:"api_key"`
-	} `toml:"llms"` // Added
+	} `toml:"llms"`
+}
+
+func validateCustomers(customers []FileCustomer) error {
+	projectIDNs := make(map[string]string) // Map to store idn -> customer.IDN
+
+	for _, c := range customers {
+		// Allow multiple integration customers to have the same project IDN
+		// The merge command will handle the ambiguity.
+		if c.Type == "integration" {
+			continue
+		}
+
+		for _, p := range c.Projects {
+			if ownerIDN, exists := projectIDNs[p.IDN]; exists {
+				return fmt.Errorf(
+					"project IDN collision: project '%s' is defined for both customer '%s' and customer '%s'",
+					p.IDN,
+					ownerIDN,
+					c.IDN,
+				)
+			}
+			projectIDNs[p.IDN] = c.IDN
+		}
+	}
+	return nil
 }
 
 func mergeTomlConfig(env *Env, isOutputRootSetInToml *bool) error {
@@ -155,8 +191,9 @@ func mergeTomlConfig(env *Env, isOutputRootSetInToml *bool) error {
 		return fmt.Errorf("read %s: %w", DefaultTomlPath, err)
 	}
 
-	var cfg tomlConfig
-	if err := toml.Unmarshal(data, &cfg); err != nil {
+	var cfg TomlConfig
+	// Use Decode instead of Unmarshal to get better error messages with line numbers.
+	if _, err := toml.Decode(string(data), &cfg); err != nil {
 		return fmt.Errorf("parse %s: %w", DefaultTomlPath, err)
 	}
 
@@ -165,6 +202,9 @@ func mergeTomlConfig(env *Env, isOutputRootSetInToml *bool) error {
 	}
 	if project := strings.TrimSpace(cfg.Defaults.ProjectID); project != "" && env.ProjectID == "" {
 		env.ProjectID = project
+	}
+	if projectIDN := strings.TrimSpace(cfg.Defaults.ProjectIDN); projectIDN != "" && env.ProjectIDN == "" {
+		env.ProjectIDN = projectIDN
 	}
 	if defCustomer := strings.TrimSpace(cfg.Defaults.DefaultCustomerIDN); defCustomer != "" && env.DefaultCustomer == "" {
 		env.DefaultCustomer = defCustomer
@@ -183,10 +223,20 @@ func mergeTomlConfig(env *Env, isOutputRootSetInToml *bool) error {
 		if apiKey == "" {
 			continue
 		}
+
+		var projects []Project
+		for _, p := range c.Projects {
+			projects = append(projects, Project{
+				IDN: strings.TrimSpace(p.IDN),
+				ID:  strings.TrimSpace(p.ID),
+			})
+		}
+
 		env.FileCustomers = append(env.FileCustomers, FileCustomer{
-			IDN:       strings.TrimSpace(c.IDN),
-			APIKey:    apiKey,
-			ProjectID: strings.TrimSpace(c.ProjectID),
+			IDN:      strings.TrimSpace(c.IDN),
+			APIKey:   apiKey,
+			Type:     strings.TrimSpace(c.Type),
+			Projects: projects,
 		})
 	}
 
@@ -201,6 +251,10 @@ func mergeTomlConfig(env *Env, isOutputRootSetInToml *bool) error {
 			Model:    strings.TrimSpace(l.Model),
 			APIKey:   apiKey,
 		})
+	}
+
+	if err := validateCustomers(env.FileCustomers); err != nil {
+		return err
 	}
 
 	return nil

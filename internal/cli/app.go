@@ -11,13 +11,7 @@ import (
 	"sort"
 )
 
-// Command describes a single CLI command.
-type Command interface {
-	Name() string
-	Summary() string
-	RegisterFlags(*flag.FlagSet)
-	Run(ctx context.Context, args []string) error
-}
+
 
 // App coordinates CLI command registration and execution.
 type App struct {
@@ -42,6 +36,8 @@ func New(stdout, stderr io.Writer) *App {
 	app.Register(NewLintCommand(stdout, stderr))
 	app.Register(NewFmtCommand(stdout, stderr))
 	app.Register(NewGenerateCommand(stdout, stderr))
+	app.Register(NewHealthcheckCommand(stdout, stderr))
+	app.Register(NewMergeCommand(stdout, stderr))
 
 	return app
 }

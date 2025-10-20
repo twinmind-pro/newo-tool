@@ -189,7 +189,7 @@ func (c *PushCommand) pushCustomer(ctx context.Context, session *session.Session
 
 	for projectIDN, projectData := range projectMap.Projects {
 		projectSlug := c.projectSlug(projectIDN, projectData)
-		projectDir := fsutil.ExportProjectDir(c.outputRoot, projectSlug)
+
 
 		flowCache := make(map[string]*flowSnapshot)
 		for agentIDN, agentData := range projectData.Agents {
@@ -198,7 +198,9 @@ func (c *PushCommand) pushCustomer(ctx context.Context, session *session.Session
 					entry := skillInfo
 					flowData.Skills[skillIDN] = entry
 
-					scriptPath := c.skillPath(projectDir, flowIDN, skillIDN, skillInfo)
+					ext := platform.ScriptExtension(skillInfo.RunnerType)
+					fileName := fmt.Sprintf("%s.%s", skillIDN, ext)
+					scriptPath := fsutil.ExportSkillScriptPath(c.outputRoot, session.CustomerType, session.IDN, projectSlug, agentIDN, flowIDN, fileName)
 					normalized := filepath.ToSlash(scriptPath)
 
 					oldHash, tracked := oldHashes[normalized]
@@ -366,15 +368,7 @@ func (c *PushCommand) projectSlug(projectIDN string, data state.ProjectData) str
 	return strings.ToLower(base)
 }
 
-func (c *PushCommand) skillPath(projectDir string, flowIDN string, skillIDN string, skill state.SkillMetadataInfo) string {
-	relPath := strings.TrimSpace(skill.Path)
-	if relPath == "" {
-		ext := platform.ScriptExtension(skill.RunnerType)
-		fileName := fmt.Sprintf("%s.%s", skillIDN, ext)
-		relPath = filepath.ToSlash(filepath.Join("flows", flowIDN, fileName))
-	}
-	return filepath.Join(projectDir, filepath.FromSlash(relPath))
-}
+
 
 func (c *PushCommand) remoteSkillSnapshot(ctx context.Context, client *platform.Client, flowID string, info state.SkillMetadataInfo, cache map[string]*flowSnapshot) (platform.Skill, bool, error) {
 	flowID = strings.TrimSpace(flowID)

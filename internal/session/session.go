@@ -16,10 +16,12 @@ import (
 type Session struct {
 	IDN             string
 	ProjectID       string
+	ProjectIDN      string // Added to hold per-customer project IDN
 	Client          *platform.Client
 	Tokens          auth.Tokens
 	Profile         platform.CustomerProfile
 	RegistryUpdated bool
+	CustomerType    string // Added to hold customer type
 }
 
 // New creates a new authenticated session for a given customer entry.
@@ -102,9 +104,11 @@ func New(ctx context.Context, env config.Env, entry customer.Entry, registry *st
 	return &Session{
 		IDN:             profile.IDN,
 		ProjectID:       entry.ProjectID,
+		ProjectIDN:      entry.ProjectIDN, // Pass through project IDN
 		Client:          client,
 		Tokens:          tokens,
 		Profile:         profile,
 		RegistryUpdated: registryUpdated,
+		CustomerType:    entry.Type,
 	}, nil
 }

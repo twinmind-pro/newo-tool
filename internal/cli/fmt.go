@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -52,6 +53,7 @@ func (c *FmtCommand) Run(ctx context.Context, _ []string) error {
 	}
 
 	var formattedFiles []string
+	var formatErrors []error
 
 	err = filepath.WalkDir(outputRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -61,7 +63,7 @@ func (c *FmtCommand) Run(ctx context.Context, _ []string) error {
 			formatted, err := formatter.FormatNSLFile(path)
 			if err != nil {
 				// Report error but continue formatting other files
-				_, _ = fmt.Fprintf(c.stderr, "Error formatting %s: %v\n", path, err)
+				formatErrors = append(formatErrors, fmt.Errorf("failed to format %s: %w", path, err))
 			}
 			if formatted {
 				formattedFiles = append(formattedFiles, path)
@@ -71,7 +73,14 @@ func (c *FmtCommand) Run(ctx context.Context, _ []string) error {
 	})
 
 	if err != nil {
-		return fmt.Errorf("error during formatting: %w", err)
+		return fmt.Errorf("error walking directory for formatting: %w", err)
+	}
+
+	if len(formatErrors) > 0 {
+		for _, e := range formatErrors {
+			_, _ = fmt.Fprintln(c.stderr, e.Error())
+		}
+		return errors.Join(formatErrors...)
 	}
 
 	if len(formattedFiles) == 0 {

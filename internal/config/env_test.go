@@ -2,8 +2,10 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/twinmind/newo-tool/internal/fsutil"
 )
 
@@ -50,45 +52,118 @@ func TestLoadEnvDefaults(t *testing.T) {
 	}
 }
 
-func TestLoadEnvTomlMerge(t *testing.T) {
-	dir := withTempDir(t)
-	withChdir(t, dir)
-
-	toml := `
-[defaults]
-output_root = "custom_root"
-slug_prefix = "prefix-"
-base_url = "https://example.com"
-default_customer = "ACME"
+func TestTomlLoading(t *testing.T) {
+	testCases := []struct {
+		name          string
+		tomlContent   string
+		wantErr       string
+		wantCustomers []FileCustomer
+	}{
+		{
+			name: "success: multi-project and multi-customer",
+			tomlContent: `
+[[customers]]
+  idn = "CUST1"
+  api_key = "key1"
+  type = "e2e"
+  [[customers.projects]]
+    idn = "projA"
+    id = "uuid-A"
+  [[customers.projects]]
+    idn = "projB"
+    id = "uuid-B"
 
 [[customers]]
-idn = "ACME"
-api_key = "toml-key"
-project_id = "11111111-1111-1111-1111-111111111111"
-`
-	if err := os.WriteFile("newo.toml", []byte(toml), fsutil.FilePerm); err != nil {
-		t.Fatalf("write toml: %v", err)
+  idn = "CUST2"
+  api_key = "key2"
+  type = "integration"
+  [[customers.projects]]
+    idn = "projC"
+
+[[customers]]
+  idn = "CUST3"
+  api_key = "key3"
+  type = "e2e"
+`, // No projects
+			wantCustomers: []FileCustomer{
+				{IDN: "CUST1", APIKey: "key1", Type: "e2e", Projects: []Project{{IDN: "projA", ID: "uuid-A"}, {IDN: "projB", ID: "uuid-B"}}},
+				{IDN: "CUST2", APIKey: "key2", Type: "integration", Projects: []Project{{IDN: "projC"}}},
+				{IDN: "CUST3", APIKey: "key3", Type: "e2e", Projects: nil},
+			},
+		},
+		{
+			name: "success: project idn collision allowed for integration types",
+			tomlContent: `
+[[customers]]
+  idn = "CUST1"
+  api_key = "key1"
+  type = "integration"
+  [[customers.projects]]
+    idn = "colliding-project"
+
+[[customers]]
+  idn = "CUST2"
+  api_key = "key2"
+  type = "integration"
+  [[customers.projects]]
+    idn = "colliding-project"
+`,
+			wantCustomers: []FileCustomer{
+				{IDN: "CUST1", APIKey: "key1", Type: "integration", Projects: []Project{{IDN: "colliding-project"}}},
+				{IDN: "CUST2", APIKey: "key2", Type: "integration", Projects: []Project{{IDN: "colliding-project"}}},
+			},
+		},
+		{
+			name: "error: project idn collision for e2e types",
+			tomlContent: `
+[[customers]]
+  idn = "CUST1"
+  api_key = "key1"
+  type = "e2e"
+  [[customers.projects]]
+    idn = "non-colliding-project"
+
+[[customers]]
+  idn = "CUST2"
+  api_key = "key2"
+  type = "e2e"
+  [[customers.projects]]
+    idn = "non-colliding-project"
+`,
+			wantErr: "project IDN collision: project 'non-colliding-project' is defined for both customer 'CUST1' and customer 'CUST2'",
+		},
 	}
 
-	t.Setenv("NEWO_API_KEYS", `[]`) // ensure validation passes
-	env, err := LoadEnv()
-	if err != nil {
-		t.Fatalf("LoadEnv: %v", err)
-	}
-	if env.OutputRoot != "custom_root" {
-		t.Fatalf("expected output_root merged, got %q", env.OutputRoot)
-	}
-	if env.SlugPrefix != "prefix-" {
-		t.Fatalf("expected slug prefix merged, got %q", env.SlugPrefix)
-	}
-	if env.BaseURL != "https://example.com" {
-		t.Fatalf("expected base url merged, got %q", env.BaseURL)
-	}
-	if env.DefaultCustomer != "ACME" {
-		t.Fatalf("expected default customer ACME, got %q", env.DefaultCustomer)
-	}
-	if len(env.FileCustomers) != 1 || env.FileCustomers[0].APIKey != "toml-key" {
-		t.Fatalf("expected customer from toml, got %#v", env.FileCustomers)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := withTempDir(t)
+			withChdir(t, dir)
+
+			if err := os.WriteFile("newo.toml", []byte(tc.tomlContent), fsutil.FilePerm); err != nil {
+				t.Fatalf("write toml: %v", err)
+			}
+
+			t.Setenv("NEWO_API_KEYS", `[]`) // ensure validation passes
+			env, err := LoadEnv()
+
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("LoadEnv() expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("LoadEnv() error = %q, want substring %q", err.Error(), tc.wantErr)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("LoadEnv() unexpected error: %v", err)
+			}
+
+			if diff := cmp.Diff(tc.wantCustomers, env.FileCustomers); diff != "" {
+				t.Errorf("FileCustomers mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,4 +48,25 @@ func getOutputRoot() (string, error) {
 
 	// 3. Fallback to default
 	return fsutil.DefaultCustomersDir, nil
+}
+
+// findTargetDir is a shared helper for commands that operate on the output directory
+// but don't need a full environment load. It finds the root, checks for existence,
+// and returns the path or an empty string if the directory doesn't exist.
+func findTargetDir(stdout io.Writer) (string, error) {
+	outputRoot, err := getOutputRoot()
+	if err != nil {
+		return "", err
+	}
+
+	if outputRoot == "" {
+		outputRoot = "."
+	}
+
+	if _, err := os.Stat(outputRoot); os.IsNotExist(err) {
+		_, _ = fmt.Fprintf(stdout, "Directory %q does not exist. Nothing to do.\n", outputRoot)
+		return "", nil // Not an error, just nothing to do.
+	}
+
+	return outputRoot, nil
 }

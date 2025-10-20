@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/twinmind/newo-tool/internal/config"
 	"github.com/twinmind/newo-tool/internal/customer"
@@ -22,6 +23,8 @@ import (
 	"github.com/twinmind/newo-tool/internal/session"
 	"github.com/twinmind/newo-tool/internal/state"
 	"github.com/twinmind/newo-tool/internal/util"
+	"golang.org/x/sync/errgroup"
+	"gopkg.in/yaml.v3"
 )
 
 func (c *PullCommand) projectSlug(project platform.Project) string {
@@ -39,15 +42,17 @@ func (c *PullCommand) projectSlug(project platform.Project) string {
 
 // PullCommand synchronises remote platform data to the local workspace.
 type PullCommand struct {
-	stdout     io.Writer
-	stderr     io.Writer
-	force      *bool
-	verbose    *bool
-	customer   *string
-	project    *string
-	outputRoot string
-	slugPrefix string
-	verboseOn  bool
+	stdout      io.Writer
+	stderr      io.Writer
+	force       *bool
+	verbose     *bool
+	customer    *string
+	projectUUID *string
+	projectIDN  *string
+	outputRoot  string
+	slugPrefix  string
+	verboseOn   bool
+	promptMu    sync.Mutex
 }
 
 // NewPullCommand constructs a pull command using provided output writers.
@@ -67,7 +72,8 @@ func (c *PullCommand) RegisterFlags(fs *flag.FlagSet) {
 	c.force = fs.Bool("force", false, "overwrite local skill scripts without prompting")
 	c.verbose = fs.Bool("verbose", false, "enable verbose logging")
 	c.customer = fs.String("customer", "", "customer IDN to limit the pull to")
-	c.project = fs.String("project", "", "restrict pull to a single project UUID")
+	c.projectUUID = fs.String("project-uuid", "", "restrict pull to a single project UUID")
+	c.projectIDN = fs.String("project-idn", "", "restrict pull to a single project IDN")
 }
 
 func (c *PullCommand) Run(ctx context.Context, _ []string) error {
@@ -78,14 +84,20 @@ func (c *PullCommand) Run(ctx context.Context, _ []string) error {
 	if c.customer != nil {
 		customerFilter = strings.TrimSpace(*c.customer)
 	}
-	projectFilter := ""
-	if c.project != nil {
-		projectFilter = strings.TrimSpace(*c.project)
-	}
 
 	env, err := config.LoadEnv()
 	if err != nil {
 		return err
+	}
+
+	projectUUIDFilter := ""
+	if c.projectUUID != nil {
+		projectUUIDFilter = strings.TrimSpace(*c.projectUUID)
+	}
+
+	projectIDNFilter := ""
+	if c.projectIDN != nil {
+		projectIDNFilter = strings.TrimSpace(*c.projectIDN)
 	}
 
 	c.outputRoot = env.OutputRoot
@@ -130,7 +142,19 @@ func (c *PullCommand) Run(ctx context.Context, _ []string) error {
 			continue
 		}
 
-		if err := c.syncCustomer(ctx, session, projectFilter, verbose, force); err != nil {
+		// Determine the effective project IDN filter with correct precedence.
+		// 1. Command-line flag
+		// 2. Per-customer `project_idn` in newo.toml
+		// 3. Global `project_idn` in newo.toml's [defaults]
+		effectiveProjectIDN := projectIDNFilter // 1. Flag
+		if effectiveProjectIDN == "" {
+			effectiveProjectIDN = session.ProjectIDN // 2. Per-customer config
+		}
+		if effectiveProjectIDN == "" {
+			effectiveProjectIDN = env.ProjectIDN // 3. Global config
+		}
+
+		if err := c.syncCustomer(ctx, session, projectUUIDFilter, effectiveProjectIDN, session.CustomerType, session.IDN, verbose, force); err != nil {
 			return err
 		}
 
@@ -164,7 +188,10 @@ func (c *PullCommand) Run(ctx context.Context, _ []string) error {
 func (c *PullCommand) syncCustomer(
 	ctx context.Context,
 	session *session.Session,
-	projectOverride string,
+	projectUUIDOverride string,
+	projectIDNOverride string,
+	customerType string,
+	customerIDN string,
 	verbose bool,
 	force bool,
 ) error {
@@ -174,11 +201,6 @@ func (c *PullCommand) syncCustomer(
 
 	if err := fsutil.EnsureWorkspace(session.IDN); err != nil {
 		return fmt.Errorf("prepare workspace: %w", err)
-	}
-
-	projectScope := strings.TrimSpace(projectOverride)
-	if projectScope == "" {
-		projectScope = strings.TrimSpace(session.ProjectID)
 	}
 
 	projectMapValue, err := state.LoadProjectMap(session.IDN)
@@ -195,16 +217,41 @@ func (c *PullCommand) syncCustomer(
 
 	var projects []platform.Project
 	var pulledProjectIDs []string
-	if projectScope != "" {
-		project, err := session.Client.GetProject(ctx, projectScope)
+
+	projectUUIDScope := strings.TrimSpace(projectUUIDOverride)
+	projectIDNScope := strings.TrimSpace(projectIDNOverride)
+
+	if projectUUIDScope != "" {
+		project, err := session.Client.GetProject(ctx, projectUUIDScope)
 		if err != nil {
-			return fmt.Errorf("fetch project %s: %w", projectScope, err)
+			return fmt.Errorf("fetch project %s: %w", projectUUIDScope, err)
 		}
 		projects = []platform.Project{project}
-	} else {
-		projects, err = session.Client.ListProjects(ctx)
+	} else if projectIDNScope != "" {
+		allProjects, err := session.Client.ListProjects(ctx)
 		if err != nil {
 			return fmt.Errorf("list projects: %w", err)
+		}
+		var foundProject *platform.Project
+		for i, p := range allProjects {
+			if strings.EqualFold(p.IDN, projectIDNScope) {
+				foundProject = &allProjects[i]
+				break
+			}
+		}
+		if foundProject != nil {
+			projects = []platform.Project{*foundProject}
+		} else {
+			return fmt.Errorf("project with idn %q not found for customer %s", projectIDNScope, session.IDN)
+		}
+	} else {
+		projectScope := strings.TrimSpace(session.ProjectID)
+		if projectScope != "" {
+			project, err := session.Client.GetProject(ctx, projectScope)
+			if err != nil {
+				return fmt.Errorf("fetch project %s: %w", projectScope, err)
+			}
+			projects = []platform.Project{project}
 		}
 	}
 
@@ -219,14 +266,28 @@ func (c *PullCommand) syncCustomer(
 		_, _ = fmt.Fprintf(c.stdout, "→ Pulling %d project(s) for %s\n", len(projects), session.IDN)
 	}
 
+	var mu sync.Mutex
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(4) // Limit concurrency to 4 projects at a time
+
 	for _, project := range projects {
-		if err := c.pullProject(ctx, session.Client, session.IDN, project, projectMap, hashes, newHashes, verbose, force); err != nil {
-			return err
-		}
-		pulledProjectIDs = append(pulledProjectIDs, strings.TrimSpace(project.IDN))
+		project := project // https://golang.org/doc/faq#closures_and_goroutines
+		g.Go(func() error {
+			if err := c.pullProject(gCtx, session.Client, session.IDN, project, projectMap, hashes, newHashes, customerType, session.IDN, verbose, force, &mu); err != nil {
+				return fmt.Errorf("pull project %s: %w", project.IDN, err)
+			}
+			mu.Lock()
+			pulledProjectIDs = append(pulledProjectIDs, strings.TrimSpace(project.IDN))
+			mu.Unlock()
+			return nil
+		})
 	}
 
-	c.exportAttributes(ctx, session, projectMap.Projects, hashes, newHashes, verbose, force)
+	if err := g.Wait(); err != nil {
+		return err
+	}
+
+	c.exportAttributes(ctx, session, projectMap.Projects, hashes, newHashes, session.CustomerType, session.IDN, verbose, force, &mu)
 
 	if err := state.SaveProjectMap(session.IDN, *projectMap); err != nil {
 		return err
@@ -237,7 +298,9 @@ func (c *PullCommand) syncCustomer(
 
 	projectLabel := "no projects"
 	if len(pulledProjectIDs) > 0 {
-		unique := uniqueStrings(pulledProjectIDs)
+	
+	
+unique := uniqueStrings(pulledProjectIDs)
 		projectLabel = strings.Join(unique, ", ")
 	}
 	_, _ = fmt.Fprintf(c.stdout, "Pull complete for %s (%s)\n", projectLabel, session.IDN)
@@ -252,15 +315,18 @@ func (c *PullCommand) pullProject(
 	projectMap *state.ProjectMap,
 	oldHashes state.HashStore,
 	newHashes state.HashStore,
+	customerType string,
+	customerIDNForPath string, // New parameter for path generation
 	verbose bool,
 	force bool,
+	mu *sync.Mutex,
 ) error {
 	if verbose {
 		_, _ = fmt.Fprintf(c.stdout, "→ Project %s (%s)\n", project.Title, project.IDN)
 	}
 
 	slug := c.projectSlug(project)
-	if err := os.MkdirAll(fsutil.ExportProjectDir(c.outputRoot, slug), fsutil.DirPerm); err != nil {
+	if err := os.MkdirAll(fsutil.ExportProjectDir(c.outputRoot, customerType, customerIDNForPath, slug), fsutil.DirPerm); err != nil {
 		return fmt.Errorf("ensure project directory: %w", err)
 	}
 
@@ -276,24 +342,33 @@ func (c *PullCommand) pullProject(
 		return fmt.Errorf("list agents: %w", err)
 	}
 
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(8)
+
 	for _, agent := range agents {
-		if err := c.pullAgent(ctx, client, customerIDN, slug, project, agent, &projectData, oldHashes, newHashes, verbose, force); err != nil {
-			return err
-		}
+		agent := agent
+		g.Go(func() error {
+			return c.pullAgent(gCtx, client, customerIDN, slug, project, agent, &projectData, oldHashes, newHashes, customerType, customerIDNForPath, verbose, force, mu)
+		})
 	}
-
-	if err := c.writeProjectJSON(oldHashes, newHashes, customerIDN, project, slug, force); err != nil {
+	if err := g.Wait(); err != nil {
 		return err
 	}
 
-	if err := c.writeFlowsYAML(oldHashes, newHashes, project, projectData, slug, force); err != nil {
+	if err := c.writeProjectJSON(oldHashes, newHashes, customerType, customerIDNForPath, project, slug, force, mu); err != nil {
 		return err
 	}
 
+	if err := c.writeFlowsYAML(oldHashes, newHashes, customerType, customerIDNForPath, project, projectData, slug, force, mu); err != nil {
+		return err
+	}
+
+	mu.Lock()
 	if projectMap.Projects == nil {
 		projectMap.Projects = map[string]state.ProjectData{}
 	}
 	projectMap.Projects[project.IDN] = projectData
+	mu.Unlock()
 	return nil
 }
 
@@ -307,8 +382,11 @@ func (c *PullCommand) pullAgent(
 	projectData *state.ProjectData,
 	oldHashes state.HashStore,
 	newHashes state.HashStore,
+	customerType string,
+	customerIDNForPath string,
 	verbose bool,
 	force bool,
+	mu *sync.Mutex,
 ) error {
 	if verbose {
 		_, _ = fmt.Fprintf(c.stdout, "   → Agent %s (%s)\n", agent.Title, agent.IDN)
@@ -321,13 +399,23 @@ func (c *PullCommand) pullAgent(
 		Flows:       map[string]state.FlowData{},
 	}
 
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(8)
+
 	for _, flow := range agent.Flows {
-		if err := c.pullFlow(ctx, client, customerIDN, projectSlug, project, agent, flow, &agentData, oldHashes, newHashes, verbose, force); err != nil {
-			return err
-		}
+		flow := flow
+		g.Go(func() error {
+			return c.pullFlow(gCtx, client, customerIDN, projectSlug, project, agent, flow, &agentData, oldHashes, newHashes, customerType, customerIDNForPath, verbose, force, mu)
+		})
 	}
 
+	if err := g.Wait(); err != nil {
+		return err
+	}
+
+	mu.Lock()
 	projectData.Agents[agent.IDN] = agentData
+	mu.Unlock()
 	return nil
 }
 
@@ -342,8 +430,11 @@ func (c *PullCommand) pullFlow(
 	agentData *state.AgentData,
 	oldHashes state.HashStore,
 	newHashes state.HashStore,
+	customerType string,
+	customerIDNForPath string,
 	verbose bool,
 	force bool,
+	mu *sync.Mutex,
 ) error {
 	if verbose {
 		_, _ = fmt.Fprintf(c.stdout, "      → Flow %s (%s)\n", flow.Title, flow.IDN)
@@ -377,6 +468,10 @@ func (c *PullCommand) pullFlow(
 		return fmt.Errorf("list flow skills: %w", err)
 	}
 
+	if err := c.exportFlowMetadata(customerType, customerIDN, projectSlug, agent.IDN, flow.IDN, flow, events, states, oldHashes, newHashes, force, mu); err != nil {
+		return fmt.Errorf("export flow metadata %s: %w", flow.IDN, err)
+	}
+
 	flowData := state.FlowData{
 		ID:          flow.ID,
 		Title:       flow.Title,
@@ -391,41 +486,99 @@ func (c *PullCommand) pullFlow(
 		StateFields: convertFlowStates(states),
 	}
 
-	for _, skill := range skills {
-		if err := c.exportSkill(projectSlug, flow.IDN, skill, oldHashes, newHashes, force); err != nil {
-			return err
-		}
-		if err := c.exportSkillMetadata(projectSlug, flow.IDN, skill, oldHashes, newHashes, force); err != nil {
-			return err
-		}
+	var g errgroup.Group
+	g.SetLimit(16)
 
-		fileName := skill.IDN + "." + platform.ScriptExtension(skill.RunnerType)
-		flowData.Skills[skill.IDN] = state.SkillMetadataInfo{
-			ID:         skill.ID,
-			IDN:        skill.IDN,
-			Title:      skill.Title,
-			RunnerType: skill.RunnerType,
-			Model: map[string]string{
-				"model_idn":    skill.Model.ModelIDN,
-				"provider_idn": skill.Model.ProviderIDN,
-			},
-			Parameters: parametersForMap(skill),
-			Path:       filepath.ToSlash(filepath.Join("flows", flow.IDN, fileName)),
-			UpdatedAt:  skill.UpdatedAt,
-		}
+	for _, skill := range skills {
+		skill := skill
+		g.Go(func() error {
+			            if err := c.exportSkill(customerType, customerIDN, projectSlug, agent.IDN, flow.IDN, skill, oldHashes, newHashes, force, mu); err != nil {				return fmt.Errorf("export skill script %s: %w", skill.IDN, err)
+			}
+			if err := c.exportSkillMetadata(customerType, customerIDN, projectSlug, agent.IDN, flow.IDN, skill, oldHashes, newHashes, force, mu); err != nil {
+				return fmt.Errorf("export skill metadata %s: %w", skill.IDN, err)
+			}
+
+			fileName := skill.IDN + "." + platform.ScriptExtension(skill.RunnerType)
+
+			mu.Lock()
+			flowData.Skills[skill.IDN] = state.SkillMetadataInfo{
+				ID:         skill.ID,
+				IDN:        skill.IDN,
+				Title:      skill.Title,
+				RunnerType: skill.RunnerType,
+				Model: map[string]string{
+					"model_idn":    skill.Model.ModelIDN,
+					"provider_idn": skill.Model.ProviderIDN,
+				},
+				Parameters: parametersForMap(skill),
+				Path:       filepath.ToSlash(filepath.Join("flows", flow.IDN, fileName)),
+				UpdatedAt:  skill.UpdatedAt,
+			}
+			mu.Unlock()
+			return nil
+		})
 	}
 
+	if err := g.Wait(); err != nil {
+		return err
+	}
+
+	mu.Lock()
 	agentData.Flows[flow.IDN] = flowData
+	mu.Unlock()
 	return nil
 }
 
-func (c *PullCommand) exportSkillMetadata(projectSlug, flowIDN string, skill platform.Skill, oldHashes, newHashes state.HashStore, force bool) error {
+func (c *PullCommand) exportFlowMetadata(
+	customerType, customerIDN, projectSlug, agentIDN, flowIDN string,
+	flow platform.Flow,
+	events []platform.FlowEvent,
+	states []platform.FlowState,
+	oldHashes, newHashes state.HashStore,
+	force bool,
+	mu *sync.Mutex,
+) error {
+		type flowMetadataYAML struct {
+		ID                string                `yaml:"id"`
+		IDN               string                `yaml:"idn"`
+		Title             string                `yaml:"title"`
+		Description       string                `yaml:"description,omitempty"`
+		DefaultRunnerType string                `yaml:"default_runner_type"`
+		DefaultModel      map[string]string     `yaml:"default_model"`
+		Events            []state.FlowEventInfo `yaml:"events"`
+		StateFields       []state.FlowStateInfo `yaml:"state_fields"`
+	}
+
+	meta := flowMetadataYAML{
+		ID:                flow.ID,
+		IDN:               flow.IDN,
+		Title:             flow.Title,
+		Description:       flow.Description,
+		DefaultRunnerType: flow.DefaultRunnerType,
+		DefaultModel: map[string]string{
+			"model_idn":    flow.DefaultModel.ModelIDN,
+			"provider_idn": flow.DefaultModel.ProviderIDN,
+		},
+		Events:      convertFlowEvents(events),
+		StateFields: convertFlowStates(states),
+	}
+
+	data, err := yaml.Marshal(meta)
+	if err != nil {
+		return fmt.Errorf("encode flow metadata: %w", err)
+	}
+
+	path := fsutil.ExportFlowMetadataPath(c.outputRoot, customerType, customerIDN, projectSlug, agentIDN, flowIDN)
+	return c.writeFileWithHash(oldHashes, newHashes, path, data, force, mu)
+}
+
+func (c *PullCommand) exportSkillMetadata(customerType, customerIDN, projectSlug, agentIDN, flowIDN string, skill platform.Skill, oldHashes, newHashes state.HashStore, force bool, mu *sync.Mutex) error {
 	data, err := serialize.SkillMetadata(skill)
 	if err != nil {
 		return err
 	}
-	path := fsutil.ExportSkillMetadataPath(c.outputRoot, projectSlug, flowIDN, skill.IDN)
-	return c.writeFileWithHash(oldHashes, newHashes, path, data, force)
+	path := fsutil.ExportSkillMetadataPath(c.outputRoot, customerType, customerIDN, projectSlug, agentIDN, flowIDN, skill.IDN)
+	return c.writeFileWithHash(oldHashes, newHashes, path, data, force, mu)
 }
 
 func parametersForMap(skill platform.Skill) []map[string]any {
@@ -480,13 +633,13 @@ func convertFlowStates(states []platform.FlowState) []state.FlowStateInfo {
 	return converted
 }
 
-func (c *PullCommand) exportSkill(projectSlug, flowIDN string, skill platform.Skill, oldHashes, newHashes state.HashStore, force bool) error {
+func (c *PullCommand) exportSkill(customerType, customerIDN, projectSlug, agentIDN, flowIDN string, skill platform.Skill, oldHashes, newHashes state.HashStore, force bool, mu *sync.Mutex) error {
 	fileName := skill.IDN + "." + platform.ScriptExtension(skill.RunnerType)
-	path := fsutil.ExportSkillScriptPath(c.outputRoot, projectSlug, flowIDN, fileName)
-	return c.writeFileWithHash(oldHashes, newHashes, path, []byte(skill.PromptScript), force)
+	path := fsutil.ExportSkillScriptPath(c.outputRoot, customerType, customerIDN, projectSlug, agentIDN, flowIDN, fileName)
+	return c.writeFileWithHash(oldHashes, newHashes, path, []byte(skill.PromptScript), force, mu)
 }
 
-func (c *PullCommand) writeProjectJSON(oldHashes, newHashes state.HashStore, customerIDN string, project platform.Project, slug string, force bool) error {
+func (c *PullCommand) writeProjectJSON(oldHashes, newHashes state.HashStore, customerType, customerIDN string, project platform.Project, slug string, force bool, mu *sync.Mutex) error {
 	content := map[string]string{
 		"customer_idn":  strings.ToLower(customerIDN),
 		"project_id":    project.ID,
@@ -497,18 +650,29 @@ func (c *PullCommand) writeProjectJSON(oldHashes, newHashes state.HashStore, cus
 	if err != nil {
 		return fmt.Errorf("encode project.json: %w", err)
 	}
-	return c.writeFileWithHash(oldHashes, newHashes, fsutil.ExportProjectJSONPath(c.outputRoot, slug), data, force)
+	return c.writeFileWithHash(oldHashes, newHashes, fsutil.ExportProjectJSONPath(c.outputRoot, customerType, customerIDN, slug), data, force, mu)
 }
 
-func (c *PullCommand) writeFlowsYAML(oldHashes, newHashes state.HashStore, project platform.Project, projectData state.ProjectData, slug string, force bool) error {
+func (c *PullCommand) writeFlowsYAML(oldHashes, newHashes state.HashStore, customerType, customerIDN string, project platform.Project, projectData state.ProjectData, slug string, force bool, mu *sync.Mutex) error {
 	data, err := serialize.GenerateFlowsYAML(project, projectData)
 	if err != nil {
 		return err
 	}
-	return c.writeFileWithHash(oldHashes, newHashes, fsutil.ExportFlowsYAMLPath(c.outputRoot, slug), data, force)
+	return c.writeFileWithHash(oldHashes, newHashes, fsutil.ExportFlowsYAMLPath(c.outputRoot, customerType, customerIDN, slug), data, force, mu)
 }
 
-func (c *PullCommand) exportAttributes(ctx context.Context, session *session.Session, projects map[string]state.ProjectData, oldHashes, newHashes state.HashStore, verbose bool, force bool) {
+func (c *PullCommand) exportAttributes(
+	ctx context.Context,
+	session *session.Session,
+	projects map[string]state.ProjectData,
+	oldHashes,
+	newHashes state.HashStore,
+	customerType string,
+	customerIDN string,
+	verbose bool,
+	force bool,
+	mu *sync.Mutex,
+) {
 	resp, err := session.Client.GetCustomerAttributes(ctx, true)
 	if err != nil {
 		if verbose {
@@ -530,7 +694,7 @@ func (c *PullCommand) exportAttributes(ctx context.Context, session *session.Ses
 		if slug == "" {
 			slug = c.slugPrefix + strings.ToLower(projectIDN)
 		}
-		if err := c.writeFileWithHash(oldHashes, newHashes, fsutil.ExportAttributesPath(c.outputRoot, slug), data, force); err != nil {
+		if err := c.writeFileWithHash(oldHashes, newHashes, fsutil.ExportAttributesPath(c.outputRoot, customerType, customerIDN, slug), data, force, mu); err != nil {
 			if verbose {
 				_, _ = fmt.Fprintf(c.stderr, "warning: write attributes for %s/%s: %v\n", session.IDN, projectIDN, err)
 			}
@@ -538,24 +702,59 @@ func (c *PullCommand) exportAttributes(ctx context.Context, session *session.Ses
 	}
 }
 
-func (c *PullCommand) writeFileWithHash(oldHashes, newHashes state.HashStore, path string, content []byte, force bool) error {
+func (c *PullCommand) confirmOverwrite(path string, lines []diff.Line) (bool, error) {
+	c.promptMu.Lock()
+	defer c.promptMu.Unlock()
+
+	_, _ = fmt.Fprint(c.stdout, diff.Format(path, lines))
+	_, _ = fmt.Fprintf(c.stdout, "Overwrite local file %s? [y/N]: ", path)
+
+	reader := bufio.NewReader(os.Stdin)
+	text, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, fmt.Errorf("read confirmation input: %w", err)
+	}
+
+	response := strings.TrimSpace(strings.ToLower(text))
+	if response != "y" {
+		_, _ = fmt.Fprintln(c.stdout, "Skipping overwrite.")
+		return false, nil
+	}
+	return true, nil
+}
+
+func (c *PullCommand) writeFileWithHash(oldHashes, newHashes state.HashStore, path string, content []byte, force bool, mu *sync.Mutex) error {
 	if newHashes == nil {
 		return fmt.Errorf("hash store not initialised")
 	}
 
 	normalized := filepath.ToSlash(path)
 	targetHash := util.SHA256Bytes(content)
+	setHash := func(value string) {
+		if mu != nil {
+			mu.Lock()
+			newHashes[normalized] = value
+			mu.Unlock()
+			return
+		}
+		newHashes[normalized] = value
+	}
 
+	fileExists := true
 	existing, err := os.ReadFile(path)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("read existing %s: %w", normalized, err)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			fileExists = false
+		} else {
+			return fmt.Errorf("read existing %s: %w", normalized, err)
+		}
 	}
 
 	existingHash := util.SHA256Bytes(existing)
 
 	// If content is unchanged, do nothing.
 	if existingHash == targetHash {
-		newHashes[normalized] = targetHash
+		setHash(targetHash)
 		return nil
 	}
 
@@ -567,28 +766,26 @@ func (c *PullCommand) writeFileWithHash(oldHashes, newHashes state.HashStore, pa
 			lines := diff.Generate(existing, content, 1)
 			_, _ = fmt.Fprint(c.stderr, diff.Format(normalized, lines))
 			// Preserve previous baseline so status/push still detect divergence.
-			newHashes[normalized] = oldHash
+			setHash(oldHash)
 			return nil
 		}
 	}
 
 	// If we are here, either there are no uncommitted changes, or --force is used.
 	// Now we ask for confirmation to overwrite.
-	if !force {
+	if !force && fileExists {
 		context := -1 // Full diff
 		if !c.verboseOn {
 			context = 3
 		}
 		lines := diff.Generate(existing, content, context)
-		_, _ = fmt.Fprint(c.stdout, diff.Format(normalized, lines))
-
-		_, _ = fmt.Fprintf(c.stdout, "Overwrite local file %s? [y/N]: ", normalized)
-		reader := bufio.NewReader(os.Stdin)
-		text, _ := reader.ReadString('\n')
-		if strings.TrimSpace(strings.ToLower(text)) != "y" {
-			_, _ = fmt.Fprintf(c.stdout, "Skipping overwrite.\n")
+		confirmed, err := c.confirmOverwrite(normalized, lines)
+		if err != nil {
+			return err
+		}
+		if !confirmed {
 			// We didn't write the new content, so the hash is the existing one.
-			newHashes[normalized] = existingHash
+			setHash(existingHash)
 			return nil
 		}
 	}
@@ -597,7 +794,7 @@ func (c *PullCommand) writeFileWithHash(oldHashes, newHashes state.HashStore, pa
 		return err
 	}
 
-	newHashes[normalized] = targetHash
+	setHash(targetHash)
 	return nil
 }
 
