@@ -114,6 +114,22 @@ type UpdateSkillRequest struct {
 	Path         string           `json:"path,omitempty"`
 }
 
+// CreateSkillRequest represents the payload for creating a new skill on a flow.
+type CreateSkillRequest struct {
+	IDN          string           `json:"idn"`
+	Title        string           `json:"title"`
+	PromptScript string           `json:"prompt_script"`
+	RunnerType   string           `json:"runner_type"`
+	Model        ModelConfig      `json:"model"`
+	Path         string           `json:"path,omitempty"`
+	Parameters   []SkillParameter `json:"parameters,omitempty"`
+}
+
+// CreateSkillResponse captures the identifier assigned to a newly created skill.
+type CreateSkillResponse struct {
+	ID string `json:"id"`
+}
+
 // PublishFlowRequest represents the payload used to publish a flow.
 type PublishFlowRequest struct {
 	Version     string `json:"version"`

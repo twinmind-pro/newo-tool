@@ -237,6 +237,20 @@ func (c *Client) UpdateSkill(ctx context.Context, skillID string, payload Update
 	return c.do(ctx, http.MethodPut, "/api/v1/designer/flows/skills/"+skillID, nil, payload, nil)
 }
 
+// CreateSkill adds a new skill under the specified flow.
+func (c *Client) CreateSkill(ctx context.Context, flowID string, payload CreateSkillRequest) (CreateSkillResponse, error) {
+	var resp CreateSkillResponse
+	if err := c.do(ctx, http.MethodPost, "/api/v1/designer/flows/"+flowID+"/skills", nil, payload, &resp); err != nil {
+		return CreateSkillResponse{}, err
+	}
+	return resp, nil
+}
+
+// DeleteSkill removes a skill from a flow.
+func (c *Client) DeleteSkill(ctx context.Context, skillID string) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/designer/flows/skills/"+skillID, nil, nil, nil)
+}
+
 // GetCustomerProfile returns information about the authenticated customer.
 func (c *Client) GetCustomerProfile(ctx context.Context) (CustomerProfile, error) {
 	var profile CustomerProfile

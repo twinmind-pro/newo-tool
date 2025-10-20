@@ -17,11 +17,19 @@ import (
 	"github.com/twinmind/newo-tool/internal/diff"
 	"github.com/twinmind/newo-tool/internal/fsutil"
 	"github.com/twinmind/newo-tool/internal/platform"
+	"github.com/twinmind/newo-tool/internal/serialize"
 	"github.com/twinmind/newo-tool/internal/session"
 	"github.com/twinmind/newo-tool/internal/state"
 	"github.com/twinmind/newo-tool/internal/ui/console"
 	"github.com/twinmind/newo-tool/internal/util"
+	"gopkg.in/yaml.v3"
 )
+
+type publishTarget struct {
+	projectIDN string
+	agentIDN   string
+	flowIDN    string
+}
 
 // PushCommand uploads local script changes to the NEWO platform.
 type PushCommand struct {
@@ -194,15 +202,13 @@ func (c *PushCommand) pushCustomer(ctx context.Context, session *session.Session
 		newHashes[path] = hash
 	}
 
-	type publishTarget struct {
-		projectIDN string
-		agentIDN   string
-		flowIDN    string
-	}
-
 	flowsToPublish := map[string]publishTarget{}
+	flowsToRegenerate := map[string]string{}
 	var errs []error
 	updatedSkills := 0
+	removedSkills := 0
+	createdSkills := 0
+	metadataChanged := false
 
 	for projectIDN, projectData := range projectMap.Projects {
 		projectSlug := c.projectSlug(projectIDN, projectData)
@@ -223,7 +229,40 @@ func (c *PushCommand) pushCustomer(ctx context.Context, session *session.Session
 					content, readErr := os.ReadFile(scriptPath)
 					if readErr != nil {
 						if errors.Is(readErr, os.ErrNotExist) {
-							c.console.Warn("Skipping %s: file not found; run `newo pull` to resynchronise", normalized)
+							if strings.TrimSpace(skillInfo.ID) == "" {
+								c.console.Warn("Skipping %s: file missing and remote identifier unknown; run `newo pull`", normalized)
+								continue
+							}
+							deleteRemote := force
+							if !deleteRemote {
+								confirmed, applyAll, confirmErr := c.confirmSkillDeletion(normalized, skillIDN)
+								if confirmErr != nil {
+									errs = append(errs, fmt.Errorf("confirm deletion %s: %w", normalized, confirmErr))
+									continue
+								}
+								if applyAll && c.force != nil {
+									*c.force = true
+									force = true
+								}
+								deleteRemote = confirmed || applyAll
+							}
+							if !deleteRemote {
+								continue
+							}
+							if verbose {
+								c.console.Info("Deleting missing skill %s/%s/%s", projectIDN, flowIDN, skillIDN)
+							}
+							if err := session.Client.DeleteSkill(ctx, strings.TrimSpace(skillInfo.ID)); err != nil {
+								errs = append(errs, fmt.Errorf("delete skill %s: %w", normalized, err))
+								continue
+							}
+							delete(flowData.Skills, skillIDN)
+							delete(newHashes, normalized)
+							delete(oldHashes, normalized)
+							removedSkills++
+							metadataChanged = true
+							flowsToRegenerate[projectIDN] = projectSlug
+							c.console.Success("Deleted remote skill %s/%s/%s", projectIDN, flowIDN, skillIDN)
 							continue
 						}
 						errs = append(errs, fmt.Errorf("read %s: %w", normalized, readErr))
@@ -304,6 +343,15 @@ func (c *PushCommand) pushCustomer(ctx context.Context, session *session.Session
 					}
 				}
 
+				flowDir := fsutil.ExportFlowDir(c.outputRoot, session.CustomerType, session.IDN, projectSlug, agentIDN, flowIDN)
+				created, err := c.createMissingSkills(ctx, session, projectIDN, projectSlug, agentIDN, flowIDN, flowDir, &flowData, newHashes, verbose, flowsToPublish)
+				if err != nil {
+					errs = append(errs, fmt.Errorf("create skills for %s/%s/%s: %w", projectIDN, agentIDN, flowIDN, err))
+				} else if created > 0 {
+					createdSkills += created
+					metadataChanged = true
+					flowsToRegenerate[projectIDN] = projectSlug
+				}
 				agentData.Flows[flowIDN] = flowData
 			}
 
@@ -313,7 +361,7 @@ func (c *PushCommand) pushCustomer(ctx context.Context, session *session.Session
 		projectMap.Projects[projectIDN] = projectData
 	}
 
-	if updatedSkills == 0 && len(errs) == 0 {
+	if updatedSkills == 0 && removedSkills == 0 && createdSkills == 0 && len(errs) == 0 {
 		c.console.Info("No changes to push for %s.", session.IDN)
 		return nil
 	}
@@ -324,16 +372,30 @@ func (c *PushCommand) pushCustomer(ctx context.Context, session *session.Session
 		} else {
 			c.console.Success("Push complete for %s (%d skill(s) updated)", session.IDN, updatedSkills)
 		}
+	}
+	if removedSkills > 0 {
+		c.console.Success("Removed %d skill(s) for %s", removedSkills, session.IDN)
+	}
+	if createdSkills > 0 {
+		c.console.Success("Created %d skill(s) for %s", createdSkills, session.IDN)
+	}
 
+	if updatedSkills > 0 || removedSkills > 0 || createdSkills > 0 {
 		if err := state.SaveProjectMap(session.IDN, projectMap); err != nil {
 			errs = append(errs, fmt.Errorf("save project map: %w", err))
 		}
-
 		if err := state.SaveHashes(session.IDN, newHashes); err != nil {
 			errs = append(errs, fmt.Errorf("save hashes: %w", err))
 		}
-
-		if shouldPublish && len(flowsToPublish) > 0 {
+		if metadataChanged {
+			for pid, slug := range flowsToRegenerate {
+				data := projectMap.Projects[pid]
+				if err := c.regenerateFlowsYAML(session.CustomerType, session.IDN, pid, slug, data, newHashes); err != nil {
+					errs = append(errs, err)
+				}
+			}
+		}
+		if updatedSkills > 0 && shouldPublish && len(flowsToPublish) > 0 {
 			if verbose {
 				c.console.Info("Publishing %d flow(s) for %s", len(flowsToPublish), session.IDN)
 			}
@@ -365,6 +427,222 @@ func (c *PushCommand) pushSkill(ctx context.Context, client *platform.Client, re
 		Path:         remote.Path,
 	}
 	return client.UpdateSkill(ctx, remote.ID, request)
+}
+
+func (c *PushCommand) createMissingSkills(
+	ctx context.Context,
+	session *session.Session,
+	projectIDN, projectSlug, agentIDN, flowIDN, flowDir string,
+	flowData *state.FlowData,
+	newHashes state.HashStore,
+	verbose bool,
+	flowsToPublish map[string]publishTarget,
+) (int, error) {
+	entries, err := os.ReadDir(flowDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("read flow directory: %w", err)
+	}
+	created := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".meta.yaml") || name == "metadata.yaml" {
+			continue
+		}
+		skillIDN := strings.TrimSuffix(name, ".meta.yaml")
+		if _, exists := flowData.Skills[skillIDN]; exists {
+			continue
+		}
+		metadataPath := filepath.Join(flowDir, name)
+		metadataBytes, err := os.ReadFile(metadataPath)
+		if err != nil {
+			return created, fmt.Errorf("read metadata %s: %w", metadataPath, err)
+		}
+		metaDoc, err := parseSkillMetadataYAML(metadataBytes)
+		if err != nil {
+			return created, fmt.Errorf("decode metadata %s: %w", metadataPath, err)
+		}
+		if metaDoc.IDN == "" {
+			metaDoc.IDN = skillIDN
+		}
+		title := metaDoc.Title
+		if strings.TrimSpace(title) == "" {
+			title = metaDoc.IDN
+		}
+		ext := platform.ScriptExtension(metaDoc.RunnerType)
+		scriptPath := filepath.Join(flowDir, fmt.Sprintf("%s.%s", skillIDN, ext))
+		scriptBytes, err := os.ReadFile(scriptPath)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return created, fmt.Errorf("read script %s: %w", scriptPath, err)
+		}
+		if errors.Is(err, os.ErrNotExist) {
+			scriptBytes = []byte{}
+		}
+		if verbose {
+			c.console.Info("Creating new skill %s/%s/%s", projectIDN, flowIDN, skillIDN)
+		}
+		if strings.TrimSpace(flowData.ID) == "" {
+			c.console.Warn("Skipping %s/%s/%s: missing flow identifier", projectIDN, flowIDN, skillIDN)
+			continue
+		}
+		createReq := platform.CreateSkillRequest{
+			IDN:          metaDoc.IDN,
+			Title:        title,
+			PromptScript: string(scriptBytes),
+			RunnerType:   metaDoc.RunnerType,
+			Model: platform.ModelConfig{
+				ModelIDN:    metaDoc.Model.ModelIDN,
+				ProviderIDN: metaDoc.Model.ProviderIDN,
+			},
+			Parameters: convertParametersForAPI(metaDoc.Parameters),
+		}
+		resp, err := session.Client.CreateSkill(ctx, flowData.ID, createReq)
+		if err != nil {
+			return created, fmt.Errorf("create skill %s: %w", skillIDN, err)
+		}
+		created++
+		platformSkill := platform.Skill{
+			ID:           resp.ID,
+			IDN:          metaDoc.IDN,
+			Title:        title,
+			PromptScript: string(scriptBytes),
+			RunnerType:   metaDoc.RunnerType,
+			Model:        createReq.Model,
+			Parameters:   createReq.Parameters,
+		}
+		metaBytes, err := serialize.SkillMetadata(platformSkill)
+		if err != nil {
+			return created, fmt.Errorf("serialize metadata %s: %w", skillIDN, err)
+		}
+		if err := fsutil.EnsureParentDir(metadataPath); err != nil {
+			return created, err
+		}
+		if err := os.WriteFile(metadataPath, metaBytes, fsutil.FilePerm); err != nil {
+			return created, fmt.Errorf("write metadata %s: %w", metadataPath, err)
+		}
+		if err := fsutil.EnsureParentDir(scriptPath); err != nil {
+			return created, err
+		}
+		if err := os.WriteFile(scriptPath, scriptBytes, fsutil.FilePerm); err != nil {
+			return created, fmt.Errorf("write script %s: %w", scriptPath, err)
+		}
+		flowData.Skills[skillIDN] = state.SkillMetadataInfo{
+			ID:         resp.ID,
+			IDN:        metaDoc.IDN,
+			Title:      title,
+			RunnerType: metaDoc.RunnerType,
+			Model: map[string]string{
+				"model_idn":    metaDoc.Model.ModelIDN,
+				"provider_idn": metaDoc.Model.ProviderIDN,
+			},
+			Parameters: convertParametersForState(metaDoc.Parameters),
+		}
+		scriptHash := util.SHA256Bytes(scriptBytes)
+		metadataHash := util.SHA256Bytes(metaBytes)
+		newHashes[filepath.ToSlash(scriptPath)] = scriptHash
+		newHashes[filepath.ToSlash(metadataPath)] = metadataHash
+		if strings.TrimSpace(flowData.ID) != "" {
+			flowsToPublish[flowData.ID] = publishTarget{projectIDN: projectIDN, agentIDN: agentIDN, flowIDN: flowIDN}
+		}
+		c.console.Success("Created skill %s/%s/%s", projectIDN, flowIDN, skillIDN)
+	}
+	return created, nil
+}
+
+func (c *PushCommand) confirmSkillDeletion(path, skillIDN string) (bool, bool, error) {
+	c.ensureConsole()
+	c.console.Prompt("Skill %s missing locally. Delete remote version %s? [y/N/a]: ", skillIDN, path)
+	reader := bufio.NewReader(os.Stdin)
+	text, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, false, err
+	}
+	switch strings.TrimSpace(strings.ToLower(text)) {
+	case "y":
+		return true, false, nil
+	case "a":
+		return true, true, nil
+	default:
+		c.console.Info("Keeping remote skill.")
+		return false, false, nil
+	}
+}
+
+func (c *PushCommand) regenerateFlowsYAML(customerType, customerIDN, projectIDN, projectSlug string, projectData state.ProjectData, hashes state.HashStore) error {
+	project := platform.Project{ID: projectData.ProjectID, IDN: projectIDN, Title: projectIDN}
+	content, err := serialize.GenerateFlowsYAML(project, projectData)
+	if err != nil {
+		return fmt.Errorf("generate flows.yaml: %w", err)
+	}
+	path := fsutil.ExportFlowsYAMLPath(c.outputRoot, customerType, customerIDN, projectSlug)
+	if err := fsutil.EnsureParentDir(path); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, content, fsutil.FilePerm); err != nil {
+		return fmt.Errorf("write flows.yaml: %w", err)
+	}
+	hashes[filepath.ToSlash(path)] = util.SHA256Bytes(content)
+	return nil
+}
+
+type skillMetadataDocument struct {
+	ID         string                   `yaml:"id"`
+	IDN        string                   `yaml:"idn"`
+	Title      string                   `yaml:"title"`
+	RunnerType string                   `yaml:"runner_type"`
+	Model      skillMetadataModel       `yaml:"model"`
+	Parameters []skillParameterMetadata `yaml:"parameters"`
+}
+
+type skillMetadataModel struct {
+	ModelIDN    string `yaml:"modelidn"`
+	ProviderIDN string `yaml:"provideridn"`
+}
+
+type skillParameterMetadata struct {
+	Name         string      `yaml:"name"`
+	DefaultValue interface{} `yaml:"default_value"`
+}
+
+func parseSkillMetadataYAML(data []byte) (skillMetadataDocument, error) {
+	var doc skillMetadataDocument
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return skillMetadataDocument{}, err
+	}
+	return doc, nil
+}
+
+func convertParametersForAPI(params []skillParameterMetadata) []platform.SkillParameter {
+	if len(params) == 0 {
+		return nil
+	}
+	result := make([]platform.SkillParameter, 0, len(params))
+	for _, p := range params {
+		result = append(result, platform.SkillParameter{
+			Name:         p.Name,
+			DefaultValue: fmt.Sprint(p.DefaultValue),
+		})
+	}
+	return result
+}
+
+func convertParametersForState(params []skillParameterMetadata) []map[string]any {
+	if len(params) == 0 {
+		return nil
+	}
+	result := make([]map[string]any, 0, len(params))
+	for _, p := range params {
+		result = append(result, map[string]any{
+			"name":          p.Name,
+			"default_value": p.DefaultValue,
+		})
+	}
+	return result
 }
 
 func (c *PushCommand) projectSlug(projectIDN string, data state.ProjectData) string {

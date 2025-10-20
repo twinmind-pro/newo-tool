@@ -15,12 +15,15 @@ import (
 	"strings"
 	"sync"
 
+	"encoding/json"
+
 	"github.com/twinmind/newo-tool/internal/config"
 	"github.com/twinmind/newo-tool/internal/customer"
 	"github.com/twinmind/newo-tool/internal/diff"
 	"github.com/twinmind/newo-tool/internal/fsutil"
 	"github.com/twinmind/newo-tool/internal/state"
 	"github.com/twinmind/newo-tool/internal/ui/console"
+	"gopkg.in/yaml.v3"
 )
 
 // MergeCommand merges changes from a source project to a target project.
@@ -71,6 +74,12 @@ func (c *MergeCommand) Name() string {
 
 func (c *MergeCommand) Summary() string {
 	return "Merge changes from a source project to a target project"
+}
+
+func (c *MergeCommand) ensureConsole() {
+	if c.console == nil {
+		c.console = console.New(c.stdout, c.stderr)
+	}
 }
 
 func (c *MergeCommand) RegisterFlags(fs *flag.FlagSet) {
@@ -265,7 +274,8 @@ func (c *MergeCommand) runPushCommand(ctx context.Context, customerIDN string, f
 }
 
 func (c *MergeCommand) copyProjectFiles(sourceDir, targetDir string, force bool) error {
-	return filepath.WalkDir(sourceDir, func(path string, d fs.DirEntry, err error) error {
+	keep := make(map[string]struct{})
+	if err := filepath.WalkDir(sourceDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -291,11 +301,62 @@ func (c *MergeCommand) copyProjectFiles(sourceDir, targetDir string, force bool)
 			return fmt.Errorf("failed to read target file %q: %w", targetPath, err)
 		}
 
-		if !force && !bytes.Equal(sourceContent, targetContent) {
-			lines := diff.Generate(targetContent, sourceContent, 3)
-			confirmed, err := c.confirmOverwrite(targetPath, lines)
+		keep[relPath] = struct{}{}
+		sourceForCompare := sourceContent
+		targetForCompare := targetContent
+		writeContent := sourceContent
+
+		switch {
+		case strings.HasSuffix(path, ".meta.yaml"):
+			sanitizedSource := canonicalizeSkillMeta(stripSkillMetaID(sourceContent))
+			sanitizedTarget := canonicalizeSkillMeta(stripSkillMetaID(targetContent))
+			targetID := extractSkillMetaID(targetContent)
+
+			sourceForCompare = sanitizedSource
+			targetForCompare = sanitizedTarget
+
+			if targetID != "" {
+				writeContent = prependSkillMetaID(targetID, sanitizedSource)
+			} else {
+				writeContent = ensureTrailingNewline(sanitizedSource)
+			}
+		case strings.HasSuffix(path, "metadata.yaml"):
+			sanitizedSource := removeFlowStateFieldIDs(canonicalizeFlowMetadata(stripFlowMetaID(sourceContent)))
+			sanitizedTarget := removeFlowStateFieldIDs(canonicalizeFlowMetadata(stripFlowMetaID(targetContent)))
+			targetID := extractFlowMetaID(targetContent)
+			targetFieldIDs := extractFlowStateFieldIDs(targetContent)
+
+			sourceForCompare = sanitizedSource
+			targetForCompare = sanitizedTarget
+
+			bodyWithIDs := applyFlowStateFieldIDs(sanitizedSource, targetFieldIDs)
+			if targetID != "" {
+				writeContent = prependFlowMetaID(targetID, bodyWithIDs)
+			} else {
+				writeContent = ensureTrailingNewline(bodyWithIDs)
+			}
+		case strings.HasSuffix(path, "project.json"):
+			sanitizedSource, sourceIDs := canonicalizeProjectJSON(sourceContent)
+			sanitizedTarget, targetIDs := canonicalizeProjectJSON(targetContent)
+
+			sourceForCompare = sanitizedSource
+			targetForCompare = sanitizedTarget
+
+			restoreIDs := targetIDs
+			if len(restoreIDs) == 0 {
+				restoreIDs = sourceIDs
+			}
+			writeContent = applyProjectIDs(sanitizedSource, restoreIDs)
+		}
+
+		if !force && !bytes.Equal(sourceForCompare, targetForCompare) {
+			lines := diff.Generate(targetForCompare, sourceForCompare, 3)
+			confirmed, applyAll, err := c.confirmOverwrite(targetPath, lines)
 			if err != nil {
 				return err
+			}
+			if applyAll {
+				force = true
 			}
 			if !confirmed {
 				c.console.Warn("Skipped %s (not confirmed)", targetPath)
@@ -303,33 +364,113 @@ func (c *MergeCommand) copyProjectFiles(sourceDir, targetDir string, force bool)
 			}
 		}
 
-		if err := os.WriteFile(targetPath, sourceContent, fsutil.FilePerm); err != nil {
+		if err := os.WriteFile(targetPath, writeContent, fsutil.FilePerm); err != nil {
 			return fmt.Errorf("failed to write file %q: %w", targetPath, err)
 		}
 		c.console.Info("Copied %s → %s", path, targetPath)
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	return c.removeStaleFiles(targetDir, keep, force)
 }
 
-func (c *MergeCommand) confirmOverwrite(path string, lines []diff.Line) (bool, error) {
+func (c *MergeCommand) confirmOverwrite(path string, lines []diff.Line) (bool, bool, error) {
 	c.promptMu.Lock()
 	defer c.promptMu.Unlock()
 
+	c.ensureConsole()
 	c.console.Write(diff.Format(path, lines))
-	c.console.Prompt("Overwrite local file %s? [y/N]: ", path)
+	c.console.Prompt("Overwrite local file %s? [y/N/a]: ", path)
 
 	reader := bufio.NewReader(os.Stdin)
 	text, err := reader.ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
-		return false, fmt.Errorf("read confirmation input: %w", err)
+		return false, false, fmt.Errorf("read confirmation input: %w", err)
 	}
 
 	response := strings.TrimSpace(strings.ToLower(text))
-	if response != "y" {
+	switch response {
+	case "y":
+		return true, false, nil
+	case "a":
+		if c.force != nil {
+			*c.force = true
+		}
+		c.console.Info("Applying overwrite to all subsequent files.")
+		return true, true, nil
+	default:
 		c.console.Info("Keeping existing file.")
-		return false, nil
+		return false, false, nil
 	}
-	return true, nil
+}
+
+func (c *MergeCommand) removeStaleFiles(targetDir string, keep map[string]struct{}, force bool) error {
+	removeAll := force
+	return filepath.WalkDir(targetDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(targetDir, path)
+		if err != nil {
+			return fmt.Errorf("stale-file rel path: %w", err)
+		}
+		if _, ok := keep[rel]; ok {
+			return nil
+		}
+		remove := removeAll
+		if !removeAll {
+			confirmed, applyAll, err := c.confirmRemoval(path)
+			if err != nil {
+				return err
+			}
+			if applyAll {
+				removeAll = true
+				remove = true
+			} else {
+				remove = confirmed
+			}
+		}
+		if !remove {
+			return nil
+		}
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove stale file %q: %w", path, err)
+		}
+		c.console.Info("Removed %s (not present in source).", path)
+		return nil
+	})
+}
+
+func (c *MergeCommand) confirmRemoval(path string) (bool, bool, error) {
+	c.promptMu.Lock()
+	defer c.promptMu.Unlock()
+
+	c.ensureConsole()
+	c.console.Prompt("Remove local file %s? [y/N/a]: ", path)
+
+	reader := bufio.NewReader(os.Stdin)
+	text, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, false, fmt.Errorf("read confirmation input: %w", err)
+	}
+
+	switch strings.TrimSpace(strings.ToLower(text)) {
+	case "y":
+		return true, false, nil
+	case "a":
+		if c.force != nil {
+			*c.force = true
+		}
+		c.console.Info("Applying removal to all subsequent files.")
+		return true, true, nil
+	default:
+		c.console.Info("Keeping local file.")
+		return false, false, nil
+	}
 }
 
 func (c *MergeCommand) lookupCustomer(entries []customer.Entry, customerIDN, projectIDN, role string) (*customer.Entry, error) {
@@ -422,4 +563,628 @@ func (c *MergeCommand) projectSlugFromState(customerIDN, projectIDN string) (str
 	}
 
 	return "", fmt.Errorf("project %q not found in local state for customer %q. Run 'newo pull --customer %s --project-idn %s' first", projectIDN, customerIDN, customerIDN, projectIDN)
+}
+
+func stripSkillMetaID(content []byte) []byte {
+	if len(content) == 0 {
+		return content
+	}
+	lines := strings.Split(string(content), "\n")
+	trimmed := make([]string, 0, len(lines))
+	removed := false
+	for _, line := range lines {
+		t := strings.TrimSpace(line)
+		if !removed && strings.HasPrefix(t, "id:") && !strings.HasPrefix(t, "idn:") {
+			removed = true
+			continue
+		}
+		trimmed = append(trimmed, line)
+	}
+	for len(trimmed) > 0 && strings.TrimSpace(trimmed[0]) == "" {
+		trimmed = trimmed[1:]
+	}
+	return []byte(strings.Join(trimmed, "\n"))
+}
+
+func extractSkillMetaID(content []byte) string {
+	if len(content) == 0 {
+		return ""
+	}
+	lines := strings.Split(string(content), "\n")
+	for _, line := range lines {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "id:") && !strings.HasPrefix(t, "idn:") {
+			value := strings.TrimSpace(strings.TrimPrefix(t, "id:"))
+			return strings.Trim(value, "\"")
+		}
+	}
+	return ""
+}
+
+func prependSkillMetaID(id string, body []byte) []byte {
+	cleaned := strings.TrimLeft(string(body), "\n")
+	if strings.TrimSpace(id) == "" {
+		return ensureTrailingNewline([]byte(cleaned))
+	}
+	if cleaned != "" && !strings.HasSuffix(cleaned, "\n") {
+		cleaned += "\n"
+	}
+	return []byte(fmt.Sprintf("id: %s\n%s", id, cleaned))
+}
+
+func ensureTrailingNewline(body []byte) []byte {
+	cleaned := strings.TrimLeft(string(body), "\n")
+	if cleaned == "" {
+		return []byte{}
+	}
+	if !strings.HasSuffix(cleaned, "\n") {
+		cleaned += "\n"
+	}
+	return []byte(cleaned)
+}
+
+func canonicalizeSkillMeta(body []byte) []byte {
+	trimmed := strings.TrimLeft(string(body), "\n")
+	if strings.TrimSpace(trimmed) == "" {
+		return []byte{}
+	}
+
+	var node yaml.Node
+	if err := yaml.Unmarshal([]byte(trimmed), &node); err != nil {
+		return []byte(trimmed)
+	}
+
+	root := &node
+	if node.Kind == yaml.DocumentNode && len(node.Content) > 0 {
+		root = node.Content[0]
+	}
+
+	if root.Kind == yaml.MappingNode {
+		for i := 0; i < len(root.Content)-1; i += 2 {
+			key := root.Content[i]
+			value := root.Content[i+1]
+			if key.Value == "parameters" && value.Kind == yaml.SequenceNode {
+				sort.SliceStable(value.Content, func(a, b int) bool {
+					return skillParameterName(value.Content[a]) < skillParameterName(value.Content[b])
+				})
+			}
+		}
+	}
+
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(&node); err == nil {
+		_ = enc.Close()
+		return []byte(strings.TrimLeft(buf.String(), "\n"))
+	}
+	_ = enc.Close()
+	return []byte(trimmed)
+}
+
+func skillParameterName(node *yaml.Node) string {
+	if node == nil {
+		return ""
+	}
+	if node.Kind == yaml.MappingNode {
+		for i := 0; i < len(node.Content)-1; i += 2 {
+			key := node.Content[i]
+			if key.Value == "name" {
+				return node.Content[i+1].Value
+			}
+		}
+	}
+	if node.Kind == yaml.DocumentNode && len(node.Content) > 0 {
+		return skillParameterName(node.Content[0])
+	}
+	return ""
+}
+
+func stripFlowMetaID(content []byte) []byte {
+	if len(content) == 0 {
+		return content
+	}
+	lines := strings.Split(string(content), "\n")
+	trimmed := make([]string, 0, len(lines))
+	removed := false
+	for _, line := range lines {
+		t := strings.TrimSpace(line)
+		if !removed && strings.HasPrefix(t, "id:") && !strings.HasPrefix(t, "idn:") {
+			removed = true
+			continue
+		}
+		trimmed = append(trimmed, line)
+	}
+	for len(trimmed) > 0 && strings.TrimSpace(trimmed[0]) == "" {
+		trimmed = trimmed[1:]
+	}
+	return []byte(strings.Join(trimmed, "\n"))
+}
+
+func extractFlowMetaID(content []byte) string {
+	if len(content) == 0 {
+		return ""
+	}
+	lines := strings.Split(string(content), "\n")
+	for _, line := range lines {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "id:") && !strings.HasPrefix(t, "idn:") {
+			value := strings.TrimSpace(strings.TrimPrefix(t, "id:"))
+			return strings.Trim(value, "\"")
+		}
+	}
+	return ""
+}
+
+func prependFlowMetaID(id string, body []byte) []byte {
+	cleaned := strings.TrimLeft(string(body), "\n")
+	if strings.TrimSpace(id) == "" {
+		return ensureTrailingNewline([]byte(cleaned))
+	}
+	if cleaned != "" && !strings.HasSuffix(cleaned, "\n") {
+		cleaned += "\n"
+	}
+	return []byte(fmt.Sprintf("id: %s\n%s", id, cleaned))
+}
+
+func canonicalizeFlowMetadata(body []byte) []byte {
+	trimmed := strings.TrimLeft(string(body), "\n")
+	if strings.TrimSpace(trimmed) == "" {
+		return []byte{}
+	}
+
+	var node yaml.Node
+	if err := yaml.Unmarshal([]byte(trimmed), &node); err != nil {
+		return []byte(trimmed)
+	}
+
+	root := &node
+	if node.Kind == yaml.DocumentNode && len(node.Content) > 0 {
+		root = node.Content[0]
+	}
+
+	if root.Kind == yaml.MappingNode {
+		for i := 0; i < len(root.Content)-1; i += 2 {
+			key := root.Content[i]
+			value := root.Content[i+1]
+			switch key.Value {
+			case "events":
+				if value.Kind == yaml.SequenceNode {
+					sort.SliceStable(value.Content, func(a, b int) bool {
+						return flowEventKey(value.Content[a]) < flowEventKey(value.Content[b])
+					})
+				}
+			case "states":
+				if value.Kind == yaml.SequenceNode {
+					sort.SliceStable(value.Content, func(a, b int) bool {
+						return flowStateKey(value.Content[a]) < flowStateKey(value.Content[b])
+					})
+					for _, stateNode := range value.Content {
+						normalizeFlowState(stateNode)
+					}
+				}
+			case "state_fields":
+				if value.Kind == yaml.SequenceNode {
+					sort.SliceStable(value.Content, func(a, b int) bool {
+						return flowStateFieldName(value.Content[a]) < flowStateFieldName(value.Content[b])
+					})
+					for _, fieldNode := range value.Content {
+						removeMappingKey(fieldNode, "id")
+					}
+				}
+			}
+		}
+	}
+
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(&node); err == nil {
+		_ = enc.Close()
+		return []byte(strings.TrimLeft(buf.String(), "\n"))
+	}
+	_ = enc.Close()
+	return []byte(trimmed)
+}
+
+func flowEventKey(node *yaml.Node) string {
+	if node == nil {
+		return ""
+	}
+	if node.Kind == yaml.MappingNode {
+		var idn, skill string
+		for i := 0; i < len(node.Content)-1; i += 2 {
+			key := node.Content[i]
+			value := node.Content[i+1]
+			switch key.Value {
+			case "idn":
+				idn = value.Value
+			case "skillidn":
+				skill = value.Value
+			}
+		}
+		return idn + "::" + skill
+	}
+	if node.Kind == yaml.DocumentNode && len(node.Content) > 0 {
+		return flowEventKey(node.Content[0])
+	}
+	return ""
+}
+
+func flowStateKey(node *yaml.Node) string {
+	if node == nil {
+		return ""
+	}
+	if node.Kind == yaml.MappingNode {
+		for i := 0; i < len(node.Content)-1; i += 2 {
+			key := node.Content[i]
+			if key.Value == "idn" {
+				return node.Content[i+1].Value
+			}
+		}
+	}
+	if node.Kind == yaml.DocumentNode && len(node.Content) > 0 {
+		return flowStateKey(node.Content[0])
+	}
+	return ""
+}
+
+func normalizeFlowState(node *yaml.Node) {
+	if node == nil {
+		return
+	}
+	if node.Kind == yaml.MappingNode {
+		var fieldsNode *yaml.Node
+		for i := 0; i < len(node.Content)-1; i += 2 {
+			key := node.Content[i]
+			value := node.Content[i+1]
+			if key.Value == "state_fields" && value.Kind == yaml.SequenceNode {
+				fieldsNode = value
+				break
+			}
+		}
+		if fieldsNode != nil {
+			sort.SliceStable(fieldsNode.Content, func(a, b int) bool {
+				return flowStateFieldName(fieldsNode.Content[a]) < flowStateFieldName(fieldsNode.Content[b])
+			})
+			for _, fieldNode := range fieldsNode.Content {
+				removeMappingKey(fieldNode, "id")
+			}
+		}
+	}
+}
+
+func flowStateFieldName(node *yaml.Node) string {
+	if node == nil {
+		return ""
+	}
+	if node.Kind == yaml.MappingNode {
+		for i := 0; i < len(node.Content)-1; i += 2 {
+			key := node.Content[i]
+			if key.Value == "name" {
+				return node.Content[i+1].Value
+			}
+		}
+	}
+	if node.Kind == yaml.DocumentNode && len(node.Content) > 0 {
+		return flowStateFieldName(node.Content[0])
+	}
+	return ""
+}
+
+func removeMappingKey(node *yaml.Node, target string) {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return
+	}
+	for i := 0; i < len(node.Content)-1; i += 2 {
+		if node.Content[i].Value == target {
+			node.Content = append(node.Content[:i], node.Content[i+2:]...)
+			i -= 2
+		}
+	}
+}
+
+func removeFlowStateFieldIDs(body []byte) []byte {
+	if len(body) == 0 {
+		return body
+	}
+	lines := strings.Split(string(body), "\n")
+	result := make([]string, 0, len(lines))
+	inFields := false
+	baseIndent := ""
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "state_fields:") {
+			inFields = true
+			baseIndent = leadingWhitespace(line)
+			result = append(result, line)
+			continue
+		}
+		if inFields {
+			if trimmed == "" {
+				result = append(result, line)
+				continue
+			}
+			lineIndent := leadingWhitespace(line)
+			if len(lineIndent) <= len(baseIndent) && !strings.HasPrefix(trimmed, "-") {
+				inFields = false
+			}
+		}
+		if inFields && strings.HasPrefix(trimmed, "id:") && !strings.HasPrefix(trimmed, "idn:") {
+			continue
+		}
+		result = append(result, line)
+	}
+	return []byte(strings.Join(result, "\n"))
+}
+
+func leadingWhitespace(s string) string {
+	for i, r := range s {
+		if r != ' ' && r != '\t' {
+			return s[:i]
+		}
+	}
+	return s
+}
+
+func canonicalizeProjectJSON(content []byte) ([]byte, map[string]string) {
+	if len(bytes.TrimSpace(content)) == 0 {
+		return []byte("{}\n"), nil
+	}
+	var data map[string]any
+	if err := json.Unmarshal(content, &data); err != nil {
+		return ensureJSONNewline(content), nil
+	}
+	ids := map[string]string{}
+	if v, ok := data["customer_idn"].(string); ok {
+		ids["customer_idn"] = v
+		delete(data, "customer_idn")
+	}
+	if v, ok := data["project_id"].(string); ok {
+		ids["project_id"] = v
+		delete(data, "project_id")
+	}
+	normalized, err := json.Marshal(data)
+	if err != nil {
+		return ensureJSONNewline(content), ids
+	}
+	return ensureJSONNewline(normalized), ids
+}
+
+func applyProjectIDs(body []byte, ids map[string]string) []byte {
+	var data map[string]any
+	if err := json.Unmarshal(body, &data); err != nil {
+		return ensureJSONNewline(body)
+	}
+	for k, v := range ids {
+		if v != "" {
+			data[k] = v
+		}
+	}
+	normalized, err := json.Marshal(data)
+	if err != nil {
+		return ensureJSONNewline(body)
+	}
+	return ensureJSONNewline(normalized)
+}
+
+func ensureJSONNewline(content []byte) []byte {
+	trimmed := bytes.TrimSpace(content)
+	if len(trimmed) == 0 {
+		return []byte("{}")
+	}
+	return trimmed
+}
+
+func extractFlowStateFieldIDs(content []byte) map[string]map[string]string {
+	if len(content) == 0 {
+		return nil
+	}
+	var node yaml.Node
+	if err := yaml.Unmarshal(content, &node); err != nil {
+		return nil
+	}
+	root := &node
+	if node.Kind == yaml.DocumentNode && len(node.Content) > 0 {
+		root = node.Content[0]
+	}
+	ids := make(map[string]map[string]string)
+	if root.Kind != yaml.MappingNode {
+		return ids
+	}
+	for i := 0; i < len(root.Content)-1; i += 2 {
+		key := root.Content[i]
+		value := root.Content[i+1]
+		switch key.Value {
+		case "states":
+			if value.Kind != yaml.SequenceNode {
+				continue
+			}
+			for _, stateNode := range value.Content {
+				stateIDN := flowStateKey(stateNode)
+				if stateIDN == "" {
+					continue
+				}
+				if stateMap := collectStateFieldIDs(stateNode); len(stateMap) > 0 {
+					ids[stateIDN] = stateMap
+				}
+			}
+		case "state_fields":
+			if value.Kind != yaml.SequenceNode {
+				continue
+			}
+			if rootMap := collectFieldListIDs(value); len(rootMap) > 0 {
+				ids["__root__"] = rootMap
+			}
+		}
+	}
+	return ids
+}
+
+func collectStateFieldIDs(stateNode *yaml.Node) map[string]string {
+	if stateNode == nil || stateNode.Kind != yaml.MappingNode {
+		return nil
+	}
+	result := make(map[string]string)
+	for i := 0; i < len(stateNode.Content)-1; i += 2 {
+		key := stateNode.Content[i]
+		value := stateNode.Content[i+1]
+		if key.Value != "state_fields" || value.Kind != yaml.SequenceNode {
+			continue
+		}
+		for _, fieldNode := range value.Content {
+			if fieldNode.Kind != yaml.MappingNode {
+				continue
+			}
+			var name, id string
+			for j := 0; j < len(fieldNode.Content)-1; j += 2 {
+				k := fieldNode.Content[j]
+				v := fieldNode.Content[j+1]
+				switch k.Value {
+				case "name":
+					name = v.Value
+				case "id":
+					id = v.Value
+				}
+			}
+			if name != "" && id != "" {
+				result[name] = id
+			}
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func collectFieldListIDs(seq *yaml.Node) map[string]string {
+	if seq == nil || seq.Kind != yaml.SequenceNode {
+		return nil
+	}
+	result := make(map[string]string)
+	for _, fieldNode := range seq.Content {
+		if fieldNode.Kind != yaml.MappingNode {
+			continue
+		}
+		var name, id string
+		for i := 0; i < len(fieldNode.Content)-1; i += 2 {
+			k := fieldNode.Content[i]
+			v := fieldNode.Content[i+1]
+			switch k.Value {
+			case "name":
+				name = v.Value
+			case "id":
+				id = v.Value
+			}
+		}
+		if name != "" && id != "" {
+			result[name] = id
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func applyFlowStateFieldIDs(body []byte, ids map[string]map[string]string) []byte {
+	if len(ids) == 0 {
+		return ensureTrailingNewline(body)
+	}
+	var node yaml.Node
+	if err := yaml.Unmarshal(body, &node); err != nil {
+		return ensureTrailingNewline(body)
+	}
+	root := &node
+	if node.Kind == yaml.DocumentNode && len(node.Content) > 0 {
+		root = node.Content[0]
+	}
+	if root.Kind == yaml.MappingNode {
+		for i := 0; i < len(root.Content)-1; i += 2 {
+			key := root.Content[i]
+			value := root.Content[i+1]
+			switch key.Value {
+			case "states":
+				if value.Kind != yaml.SequenceNode {
+					continue
+				}
+				for _, stateNode := range value.Content {
+					stateIDN := flowStateKey(stateNode)
+					if stateIDN == "" {
+						continue
+					}
+					fieldIDs := ids[stateIDN]
+					if len(fieldIDs) == 0 {
+						continue
+					}
+					applyIDsToStateFields(stateNode, fieldIDs)
+				}
+			case "state_fields":
+				if value.Kind != yaml.SequenceNode {
+					continue
+				}
+				applyIDsToFieldList(value, ids["__root__"])
+			}
+		}
+	}
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(&node); err == nil {
+		_ = enc.Close()
+		return []byte(strings.TrimLeft(buf.String(), "\n"))
+	}
+	_ = enc.Close()
+	return ensureTrailingNewline(body)
+}
+
+func applyIDsToStateFields(stateNode *yaml.Node, ids map[string]string) {
+	if stateNode == nil || stateNode.Kind != yaml.MappingNode {
+		return
+	}
+	for i := 0; i < len(stateNode.Content)-1; i += 2 {
+		key := stateNode.Content[i]
+		value := stateNode.Content[i+1]
+		if key.Value != "state_fields" || value.Kind != yaml.SequenceNode {
+			continue
+		}
+		for _, fieldNode := range value.Content {
+			name := flowStateFieldName(fieldNode)
+			if name == "" {
+				continue
+			}
+			if id, ok := ids[name]; ok {
+				setMappingValue(fieldNode, "id", id)
+			}
+		}
+	}
+}
+
+func applyIDsToFieldList(seq *yaml.Node, ids map[string]string) {
+	if seq == nil || seq.Kind != yaml.SequenceNode || len(ids) == 0 {
+		return
+	}
+	for _, fieldNode := range seq.Content {
+		name := flowStateFieldName(fieldNode)
+		if name == "" {
+			continue
+		}
+		if id, ok := ids[name]; ok {
+			setMappingValue(fieldNode, "id", id)
+		}
+	}
+}
+
+func setMappingValue(node *yaml.Node, key, val string) {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return
+	}
+	for i := 0; i < len(node.Content)-1; i += 2 {
+		if node.Content[i].Value == key {
+			node.Content[i+1].Value = val
+			return
+		}
+	}
+	node.Content = append(node.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: key}, &yaml.Node{Kind: yaml.ScalarNode, Value: val})
 }

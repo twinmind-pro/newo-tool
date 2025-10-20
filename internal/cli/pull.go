@@ -773,14 +773,14 @@ func (c *PullCommand) writeFileWithHash(oldHashes, newHashes state.HashStore, pa
 	existingHash := util.SHA256Bytes(existing)
 
 	// If content is unchanged, do nothing.
-	if existingHash == targetHash {
+	if fileExists && existingHash == targetHash {
 		setHash(targetHash)
 		return nil
 	}
 
 	// The file on disk is different from the content we are about to write.
 	// Check for uncommitted local changes first.
-	if oldHash, ok := oldHashes[normalized]; ok && oldHash != existingHash {
+	if oldHash, ok := oldHashes[normalized]; ok && oldHash != existingHash && fileExists {
 		if !force {
 			c.console.Warn("Skipping %s: local changes detected (use --force to overwrite)", normalized)
 			lines := diff.Generate(existing, content, 1)

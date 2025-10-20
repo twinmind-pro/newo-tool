@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/twinmind/newo-tool/internal/testutil/httpmock"
@@ -62,5 +63,48 @@ func TestClientUpdateSkill(t *testing.T) {
 	}
 	if !called {
 		t.Fatalf("expected handler to be called")
+	}
+}
+
+func TestClientCreateSkill(t *testing.T) {
+	t.Parallel()
+
+	client := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method: %s", r.Method)
+		}
+		if !strings.HasSuffix(r.URL.Path, "/api/v1/designer/flows/flow-123/skills") {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(CreateSkillResponse{ID: "skill-abc"})
+	}))
+
+	resp, err := client.CreateSkill(context.Background(), "flow-123", CreateSkillRequest{
+		IDN:        "new_skill",
+		Title:      "New Skill",
+		RunnerType: "nsl",
+		Model:      ModelConfig{ModelIDN: "gpt4o", ProviderIDN: "openai"},
+	})
+	if err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+	if resp.ID != "skill-abc" {
+		t.Fatalf("unexpected id: %s", resp.ID)
+	}
+}
+
+func TestClientDeleteSkill(t *testing.T) {
+	client := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			t.Fatalf("method: %s", r.Method)
+		}
+		if !strings.HasSuffix(r.URL.Path, "/api/v1/designer/flows/skills/skill-123") {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	if err := client.DeleteSkill(context.Background(), "skill-123"); err != nil {
+		t.Fatalf("DeleteSkill: %v", err)
 	}
 }
