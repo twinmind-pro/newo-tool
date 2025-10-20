@@ -4,6 +4,7 @@
 
 # Caches
 /.gocache/
+/.gomodcache/
 /.cache/
 /.golangci-cache/
 
