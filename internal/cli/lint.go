@@ -137,10 +137,14 @@ func (c *LintCommand) Run(ctx context.Context, _ []string) error {
 
 	printLintReport(c.console, grouped)
 
-	c.console.RawLine("Summary: %d file(s) with issues | %d error(s) | %d warning(s)", len(grouped), totalErrors, totalWarnings)
+	summary := fmt.Sprintf("Summary: %d file(s) with issues | %d error(s) | %d warning(s)", len(grouped), totalErrors, totalWarnings)
+	if totalErrors > 0 {
+		c.console.Warn("%s", summary)
+	} else {
+		c.console.Info("%s", summary)
+	}
 
-	totalIssues := totalErrors + totalWarnings
-	return fmt.Errorf("%d total linting issues found", totalIssues)
+	return newSilentExitError(1)
 }
 
 func displayLintPath(path string) string {
@@ -167,11 +171,19 @@ func printLintReport(writer *console.Writer, grouped map[string][]linter.LintErr
 		linter.SeverityWarning: 1,
 	}
 
+	colorEnabled := writer.ColorsEnabled()
+
+	const (
+		ansiReset  = "\033[0m"
+		ansiYellow = "\033[33m"
+		ansiRed    = "\033[31m"
+	)
+
 	for idx, file := range files {
 		if idx > 0 {
 			writer.RawLine("")
 		}
-		writer.RawLine("=== %s ===", file)
+		writer.Section(file)
 
 		issues := grouped[file]
 		sort.SliceStable(issues, func(i, j int) bool {
@@ -186,7 +198,18 @@ func printLintReport(writer *console.Writer, grouped map[string][]linter.LintErr
 			if issue.Line > 0 {
 				line = fmt.Sprintf("%d", issue.Line)
 			}
-			writer.RawLine("  line %-4s | %-7s | %s", line, issue.Severity, issue.Message)
+
+			formatted := fmt.Sprintf("  line %-4s | %-7s | %s", line, issue.Severity, issue.Message)
+			if colorEnabled {
+				switch issue.Severity {
+				case linter.SeverityWarning:
+					formatted = ansiYellow + formatted + ansiReset
+				case linter.SeverityError:
+					formatted = ansiRed + formatted + ansiReset
+				}
+			}
+			writer.RawLine("%s", formatted)
+
 			snippet := strings.TrimSpace(issue.Snippet)
 			if snippet != "" {
 				writer.RawLine("    > %s", snippet)

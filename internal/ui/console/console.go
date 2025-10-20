@@ -185,6 +185,11 @@ func (w *Writer) Prompt(format string, args ...any) {
 	w.wrote = true
 }
 
+// ColorsEnabled reports whether the writer emits ANSI colour codes.
+func (w *Writer) ColorsEnabled() bool {
+	return w.theme.colorEnabled
+}
+
 func (w *Writer) printLine(target io.Writer, icon, iconColor string, msgStyles []string, format string, args ...any) {
 	w.mu.Lock()
 	defer w.mu.Unlock()

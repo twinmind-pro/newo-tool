@@ -10,8 +10,15 @@ import (
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
+		exitCode := 1
+		if coder, ok := err.(interface{ ExitCode() int }); ok {
+			exitCode = coder.ExitCode()
+		}
+		if silent, ok := err.(interface{ Silent() bool }); ok && silent.Silent() {
+			os.Exit(exitCode)
+		}
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		os.Exit(exitCode)
 	}
 }
 
