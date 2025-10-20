@@ -4,6 +4,7 @@
 
 # Caches
 /.gocache/
+/.cache/
 /.golangci-cache/
 
 # Local state

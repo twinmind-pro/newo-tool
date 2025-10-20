@@ -22,6 +22,7 @@ import (
 	"github.com/twinmind/newo-tool/internal/serialize"
 	"github.com/twinmind/newo-tool/internal/session"
 	"github.com/twinmind/newo-tool/internal/state"
+	"github.com/twinmind/newo-tool/internal/ui/console"
 	"github.com/twinmind/newo-tool/internal/util"
 	"golang.org/x/sync/errgroup"
 	"gopkg.in/yaml.v3"
@@ -44,6 +45,7 @@ func (c *PullCommand) projectSlug(project platform.Project) string {
 type PullCommand struct {
 	stdout      io.Writer
 	stderr      io.Writer
+	console     *console.Writer
 	force       *bool
 	verbose     *bool
 	customer    *string
@@ -57,7 +59,17 @@ type PullCommand struct {
 
 // NewPullCommand constructs a pull command using provided output writers.
 func NewPullCommand(stdout, stderr io.Writer) *PullCommand {
-	return &PullCommand{stdout: stdout, stderr: stderr}
+	return &PullCommand{
+		stdout:  stdout,
+		stderr:  stderr,
+		console: console.New(stdout, stderr),
+	}
+}
+
+func (c *PullCommand) ensureConsole() {
+	if c.console == nil {
+		c.console = console.New(c.stdout, c.stderr)
+	}
 }
 
 func (c *PullCommand) Name() string {
@@ -77,6 +89,7 @@ func (c *PullCommand) RegisterFlags(fs *flag.FlagSet) {
 }
 
 func (c *PullCommand) Run(ctx context.Context, _ []string) error {
+	c.ensureConsole()
 	force := c.force != nil && *c.force
 	verbose := c.verbose != nil && *c.verbose
 	c.verboseOn = verbose
@@ -117,7 +130,7 @@ func (c *PullCommand) Run(ctx context.Context, _ []string) error {
 	}
 	defer func() {
 		if err := releaseLock(); err != nil && verbose {
-			_, _ = fmt.Fprintf(c.stderr, "warning: release lock: %v\n", err)
+			c.console.Warn("Release lock: %v", err)
 		}
 	}()
 
@@ -137,7 +150,7 @@ func (c *PullCommand) Run(ctx context.Context, _ []string) error {
 
 		if customerFilter != "" && !strings.EqualFold(session.IDN, customerFilter) {
 			if verbose {
-				_, _ = fmt.Fprintf(c.stdout, "Skipping customer %s, target is %s\n", session.IDN, customerFilter)
+				c.console.Info("Skipping customer %s (target is %s)", session.IDN, customerFilter)
 			}
 			continue
 		}
@@ -179,7 +192,7 @@ func (c *PullCommand) Run(ctx context.Context, _ []string) error {
 	}
 
 	if !processed && verbose {
-		_, _ = fmt.Fprintln(c.stdout, "No customers matched the selection")
+		c.console.Info("No customers matched the selection.")
 	}
 
 	return nil
@@ -195,8 +208,9 @@ func (c *PullCommand) syncCustomer(
 	verbose bool,
 	force bool,
 ) error {
+	c.ensureConsole()
 	if verbose {
-		_, _ = fmt.Fprintf(c.stdout, "→ Working with customer %s (%s)\n", session.Profile.IDN, session.Profile.ID)
+		c.console.Section(fmt.Sprintf("Customer %s (%s)", session.Profile.IDN, session.Profile.ID))
 	}
 
 	if err := fsutil.EnsureWorkspace(session.IDN); err != nil {
@@ -257,13 +271,13 @@ func (c *PullCommand) syncCustomer(
 
 	if len(projects) == 0 {
 		if verbose {
-			_, _ = fmt.Fprintf(c.stdout, "No projects found for %s\n", session.IDN)
+			c.console.Info("No projects found for %s", session.IDN)
 		}
 		return nil
 	}
 
 	if verbose {
-		_, _ = fmt.Fprintf(c.stdout, "→ Pulling %d project(s) for %s\n", len(projects), session.IDN)
+		c.console.Info("Pulling %d project(s) for %s", len(projects), session.IDN)
 	}
 
 	var mu sync.Mutex
@@ -302,7 +316,7 @@ func (c *PullCommand) syncCustomer(
 		unique := uniqueStrings(pulledProjectIDs)
 		projectLabel = strings.Join(unique, ", ")
 	}
-	_, _ = fmt.Fprintf(c.stdout, "Pull complete for %s (%s)\n", projectLabel, session.IDN)
+	c.console.Success("Pull complete for %s (%s)", projectLabel, session.IDN)
 	return nil
 }
 
@@ -320,8 +334,9 @@ func (c *PullCommand) pullProject(
 	force bool,
 	mu *sync.Mutex,
 ) error {
+	c.ensureConsole()
 	if verbose {
-		_, _ = fmt.Fprintf(c.stdout, "→ Project %s (%s)\n", project.Title, project.IDN)
+		c.console.Info("Project %s (%s)", project.Title, project.IDN)
 	}
 
 	slug := c.projectSlug(project)
@@ -387,8 +402,9 @@ func (c *PullCommand) pullAgent(
 	force bool,
 	mu *sync.Mutex,
 ) error {
+	c.ensureConsole()
 	if verbose {
-		_, _ = fmt.Fprintf(c.stdout, "   → Agent %s (%s)\n", agent.Title, agent.IDN)
+		c.console.Info("  Agent %s (%s)", agent.Title, agent.IDN)
 	}
 
 	agentData := state.AgentData{
@@ -435,15 +451,16 @@ func (c *PullCommand) pullFlow(
 	force bool,
 	mu *sync.Mutex,
 ) error {
+	c.ensureConsole()
 	if verbose {
-		_, _ = fmt.Fprintf(c.stdout, "      → Flow %s (%s)\n", flow.Title, flow.IDN)
+		c.console.Info("    Flow %s (%s)", flow.Title, flow.IDN)
 	}
 
 	events, err := client.ListFlowEvents(ctx, flow.ID)
 	if err != nil {
 		if apiErr, ok := err.(*platform.APIError); ok && apiErr.Status == http.StatusNotFound {
 			if verbose {
-				_, _ = fmt.Fprintf(c.stderr, "warning: events missing for flow %s: %v\n", flow.IDN, err)
+				c.console.Warn("Events missing for flow %s: %v", flow.IDN, err)
 			}
 		} else {
 			return fmt.Errorf("list flow events: %w", err)
@@ -454,7 +471,7 @@ func (c *PullCommand) pullFlow(
 	if err != nil {
 		if apiErr, ok := err.(*platform.APIError); ok && apiErr.Status == http.StatusNotFound {
 			if verbose {
-				_, _ = fmt.Fprintf(c.stderr, "warning: states missing for flow %s: %v\n", flow.IDN, err)
+				c.console.Warn("States missing for flow %s: %v", flow.IDN, err)
 			}
 		} else {
 			return fmt.Errorf("list flow states: %w", err)
@@ -673,10 +690,11 @@ func (c *PullCommand) exportAttributes(
 	force bool,
 	mu *sync.Mutex,
 ) {
+	c.ensureConsole()
 	resp, err := session.Client.GetCustomerAttributes(ctx, true)
 	if err != nil {
 		if verbose {
-			_, _ = fmt.Fprintf(c.stderr, "warning: fetch attributes for %s: %v\n", session.IDN, err)
+			c.console.Warn("Fetch attributes for %s: %v", session.IDN, err)
 		}
 		return
 	}
@@ -684,7 +702,7 @@ func (c *PullCommand) exportAttributes(
 	data, err := serialize.GenerateAttributesYAML(resp.Attributes)
 	if err != nil {
 		if verbose {
-			_, _ = fmt.Fprintf(c.stderr, "warning: encode attributes for %s: %v\n", session.IDN, err)
+			c.console.Warn("Encode attributes for %s: %v", session.IDN, err)
 		}
 		return
 	}
@@ -696,7 +714,7 @@ func (c *PullCommand) exportAttributes(
 		}
 		if err := c.writeFileWithHash(oldHashes, newHashes, fsutil.ExportAttributesPath(c.outputRoot, customerType, customerIDN, slug), data, force, mu); err != nil {
 			if verbose {
-				_, _ = fmt.Fprintf(c.stderr, "warning: write attributes for %s/%s: %v\n", session.IDN, projectIDN, err)
+				c.console.Warn("Write attributes for %s/%s: %v", session.IDN, projectIDN, err)
 			}
 		}
 	}
@@ -706,8 +724,9 @@ func (c *PullCommand) confirmOverwrite(path string, lines []diff.Line) (bool, er
 	c.promptMu.Lock()
 	defer c.promptMu.Unlock()
 
-	_, _ = fmt.Fprint(c.stdout, diff.Format(path, lines))
-	_, _ = fmt.Fprintf(c.stdout, "Overwrite local file %s? [y/N]: ", path)
+	c.ensureConsole()
+	c.console.Write(diff.Format(path, lines))
+	c.console.Prompt("Overwrite local file %s? [y/N]: ", path)
 
 	reader := bufio.NewReader(os.Stdin)
 	text, err := reader.ReadString('\n')
@@ -717,7 +736,7 @@ func (c *PullCommand) confirmOverwrite(path string, lines []diff.Line) (bool, er
 
 	response := strings.TrimSpace(strings.ToLower(text))
 	if response != "y" {
-		_, _ = fmt.Fprintln(c.stdout, "Skipping overwrite.")
+		c.console.Info("Keeping existing file.")
 		return false, nil
 	}
 	return true, nil
@@ -728,6 +747,7 @@ func (c *PullCommand) writeFileWithHash(oldHashes, newHashes state.HashStore, pa
 		return fmt.Errorf("hash store not initialised")
 	}
 
+	c.ensureConsole()
 	normalized := filepath.ToSlash(path)
 	targetHash := util.SHA256Bytes(content)
 	setHash := func(value string) {
@@ -762,9 +782,9 @@ func (c *PullCommand) writeFileWithHash(oldHashes, newHashes state.HashStore, pa
 	// Check for uncommitted local changes first.
 	if oldHash, ok := oldHashes[normalized]; ok && oldHash != existingHash {
 		if !force {
-			_, _ = fmt.Fprintf(c.stderr, "skipping %s: local changes detected (use --force to overwrite)\n", normalized)
+			c.console.Warn("Skipping %s: local changes detected (use --force to overwrite)", normalized)
 			lines := diff.Generate(existing, content, 1)
-			_, _ = fmt.Fprint(c.stderr, diff.Format(normalized, lines))
+			c.console.WriteErr(diff.Format(normalized, lines))
 			// Preserve previous baseline so status/push still detect divergence.
 			setHash(oldHash)
 			return nil

@@ -12,17 +12,29 @@ import (
 	"strings"
 
 	"github.com/twinmind/newo-tool/internal/formatter"
+	"github.com/twinmind/newo-tool/internal/ui/console"
 )
 
 // FmtCommand performs formatting on .nsl files.
 type FmtCommand struct {
-	stdout io.Writer
-	stderr io.Writer
+	stdout  io.Writer
+	stderr  io.Writer
+	console *console.Writer
 }
 
 // NewFmtCommand constructs a fmt command.
 func NewFmtCommand(stdout, stderr io.Writer) *FmtCommand {
-	return &FmtCommand{stdout: stdout, stderr: stderr}
+	return &FmtCommand{
+		stdout:  stdout,
+		stderr:  stderr,
+		console: console.New(stdout, stderr),
+	}
+}
+
+func (c *FmtCommand) ensureConsole() {
+	if c.console == nil {
+		c.console = console.New(c.stdout, c.stderr)
+	}
 }
 
 func (c *FmtCommand) Name() string {
@@ -38,6 +50,8 @@ func (c *FmtCommand) RegisterFlags(_ *flag.FlagSet) {
 }
 
 func (c *FmtCommand) Run(ctx context.Context, _ []string) error {
+	c.ensureConsole()
+	c.console.Section("Format")
 	outputRoot, err := getOutputRoot()
 	if err != nil {
 		return err
@@ -48,7 +62,7 @@ func (c *FmtCommand) Run(ctx context.Context, _ []string) error {
 	}
 
 	if _, err := os.Stat(outputRoot); os.IsNotExist(err) {
-		_, _ = fmt.Fprintf(c.stdout, "Directory %q does not exist. Nothing to format.\n", outputRoot)
+		c.console.Info("Directory %q does not exist. Nothing to format.", outputRoot)
 		return nil
 	}
 
@@ -78,18 +92,18 @@ func (c *FmtCommand) Run(ctx context.Context, _ []string) error {
 
 	if len(formatErrors) > 0 {
 		for _, e := range formatErrors {
-			_, _ = fmt.Fprintln(c.stderr, e.Error())
+			c.console.Warn("%s", e.Error())
 		}
 		return errors.Join(formatErrors...)
 	}
 
 	if len(formattedFiles) == 0 {
-		_, _ = fmt.Fprintln(c.stdout, "No files to format.")
+		c.console.Info("No files to format.")
 		return nil
 	}
 
 	for _, path := range formattedFiles {
-		_, _ = fmt.Fprintln(c.stdout, path)
+		c.console.Info("Formatted %s", path)
 	}
 
 	return nil

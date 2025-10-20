@@ -20,12 +20,14 @@ import (
 	"github.com/twinmind/newo-tool/internal/diff"
 	"github.com/twinmind/newo-tool/internal/fsutil"
 	"github.com/twinmind/newo-tool/internal/state"
+	"github.com/twinmind/newo-tool/internal/ui/console"
 )
 
 // MergeCommand merges changes from a source project to a target project.
 type MergeCommand struct {
-	stdout io.Writer
-	stderr io.Writer
+	stdout  io.Writer
+	stderr  io.Writer
+	console *console.Writer
 
 	// Flags
 	projectIDN        *string
@@ -47,8 +49,9 @@ type MergeCommand struct {
 // NewMergeCommand constructs a merge command.
 func NewMergeCommand(stdout, stderr io.Writer) *MergeCommand {
 	return &MergeCommand{
-		stdout: stdout,
-		stderr: stderr,
+		stdout:  stdout,
+		stderr:  stderr,
+		console: console.New(stdout, stderr),
 
 		projectIDN:        new(string),
 		sourceCustomerIDN: new(string),
@@ -164,25 +167,28 @@ func (c *MergeCommand) Run(ctx context.Context, args []string) error {
 		return fmt.Errorf("target customer %q must be of type \"integration\", but got \"%s\"", targetEntry.HintIDN, targetEntry.Type)
 	}
 
-	_, _ = fmt.Fprintf(
-		c.stdout,
-		"Validation successful: Merging project %q from e2e customer %q to integration customer %q\n",
+	c.console.Section("Merge")
+	c.console.Success(
+		"Validated project %q: %s → %s",
 		projectIDN,
 		sourceEntry.HintIDN,
 		targetEntry.HintIDN,
 	)
 
 	if !*c.noPull {
-		_, _ = fmt.Fprintln(c.stdout, "Performing initial pull for source and target projects...")
+		c.console.Section("Pull")
+		c.console.Info("Synchronising source project %s", sourceEntry.HintIDN)
 		if err := c.runPullCommand(ctx, sourceEntry.HintIDN, projectIDN); err != nil {
 			return fmt.Errorf("pull for source customer %q failed: %w", sourceEntry.HintIDN, err)
 		}
+		c.console.Success("Source project refreshed.")
+		c.console.Info("Synchronising target project %s", targetEntry.HintIDN)
 		if err := c.runPullCommand(ctx, targetEntry.HintIDN, projectIDN); err != nil {
 			return fmt.Errorf("pull for target customer %q failed: %w", targetEntry.HintIDN, err)
 		}
-		_, _ = fmt.Fprintln(c.stdout, "Initial pull complete.")
+		c.console.Success("Target project refreshed.")
 	} else {
-		_, _ = fmt.Fprintln(c.stdout, "Skipping initial pull step (--no-pull flag is set).")
+		c.console.Info("Skipping initial pull (--no-pull flag).")
 	}
 
 	sourceSlug, err := c.projectSlugFromState(sourceEntry.HintIDN, projectIDN)
@@ -207,23 +213,25 @@ func (c *MergeCommand) Run(ctx context.Context, args []string) error {
 		return fmt.Errorf("ensure target project directory: %w", err)
 	}
 
-	_, _ = fmt.Fprintf(c.stdout, "Source project directory: %q\n", sourceProjectDir)
-	_, _ = fmt.Fprintf(c.stdout, "Target project directory: %q\n", targetProjectDir)
+	c.console.Section("Copy")
+	c.console.Info("Source: %s", sourceProjectDir)
+	c.console.Info("Target: %s", targetProjectDir)
 
-	_, _ = fmt.Fprintln(c.stdout, "Copying files from source to target...")
+	c.console.Info("Copying files from source to target...")
 	if err := c.copyProjectFiles(sourceProjectDir, targetProjectDir, *c.force); err != nil {
 		return fmt.Errorf("failed to copy project files: %w", err)
 	}
-	_, _ = fmt.Fprintln(c.stdout, "File copying complete.")
+	c.console.Success("File copy complete.")
 
 	if !*c.noPush {
-		_, _ = fmt.Fprintln(c.stdout, "Pushing merged changes to target platform...")
+		c.console.Section("Push")
+		c.console.Info("Pushing merged changes to target platform...")
 		if err := c.runPushCommand(ctx, targetEntry.HintIDN, *c.force); err != nil {
 			return fmt.Errorf("push for target customer %q failed: %w", targetEntry.HintIDN, err)
 		}
-		_, _ = fmt.Fprintln(c.stdout, "Push complete.")
+		c.console.Success("Push complete.")
 	} else {
-		_, _ = fmt.Fprintln(c.stdout, "Skipping push step (--no-push flag is set).")
+		c.console.Info("Skipping push (--no-push flag).")
 	}
 
 	return nil
@@ -290,7 +298,7 @@ func (c *MergeCommand) copyProjectFiles(sourceDir, targetDir string, force bool)
 				return err
 			}
 			if !confirmed {
-				_, _ = fmt.Fprintf(c.stdout, "Skipping %q (not confirmed by user).\n", targetPath)
+				c.console.Warn("Skipped %s (not confirmed)", targetPath)
 				return nil
 			}
 		}
@@ -298,7 +306,7 @@ func (c *MergeCommand) copyProjectFiles(sourceDir, targetDir string, force bool)
 		if err := os.WriteFile(targetPath, sourceContent, fsutil.FilePerm); err != nil {
 			return fmt.Errorf("failed to write file %q: %w", targetPath, err)
 		}
-		_, _ = fmt.Fprintf(c.stdout, "Copied %q to %q\n", path, targetPath)
+		c.console.Info("Copied %s → %s", path, targetPath)
 		return nil
 	})
 }
@@ -307,8 +315,8 @@ func (c *MergeCommand) confirmOverwrite(path string, lines []diff.Line) (bool, e
 	c.promptMu.Lock()
 	defer c.promptMu.Unlock()
 
-	_, _ = fmt.Fprint(c.stdout, diff.Format(path, lines))
-	_, _ = fmt.Fprintf(c.stdout, "Overwrite local file %s? [y/N]: ", path)
+	c.console.Write(diff.Format(path, lines))
+	c.console.Prompt("Overwrite local file %s? [y/N]: ", path)
 
 	reader := bufio.NewReader(os.Stdin)
 	text, err := reader.ReadString('\n')
@@ -318,7 +326,7 @@ func (c *MergeCommand) confirmOverwrite(path string, lines []diff.Line) (bool, e
 
 	response := strings.TrimSpace(strings.ToLower(text))
 	if response != "y" {
-		_, _ = fmt.Fprintln(c.stdout, "Skipping overwrite.")
+		c.console.Info("Keeping existing file.")
 		return false, nil
 	}
 	return true, nil

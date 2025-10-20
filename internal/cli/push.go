@@ -19,6 +19,7 @@ import (
 	"github.com/twinmind/newo-tool/internal/platform"
 	"github.com/twinmind/newo-tool/internal/session"
 	"github.com/twinmind/newo-tool/internal/state"
+	"github.com/twinmind/newo-tool/internal/ui/console"
 	"github.com/twinmind/newo-tool/internal/util"
 )
 
@@ -26,6 +27,7 @@ import (
 type PushCommand struct {
 	stdout    io.Writer
 	stderr    io.Writer
+	console   *console.Writer
 	verbose   *bool
 	customer  *string
 	noPublish *bool
@@ -37,7 +39,17 @@ type PushCommand struct {
 
 // NewPushCommand constructs a push command.
 func NewPushCommand(stdout, stderr io.Writer) *PushCommand {
-	return &PushCommand{stdout: stdout, stderr: stderr}
+	return &PushCommand{
+		stdout:  stdout,
+		stderr:  stderr,
+		console: console.New(stdout, stderr),
+	}
+}
+
+func (c *PushCommand) ensureConsole() {
+	if c.console == nil {
+		c.console = console.New(c.stdout, c.stderr)
+	}
 }
 
 func (c *PushCommand) Name() string {
@@ -56,6 +68,7 @@ func (c *PushCommand) RegisterFlags(fs *flag.FlagSet) {
 }
 
 func (c *PushCommand) Run(ctx context.Context, args []string) error {
+	c.ensureConsole()
 	if len(args) > 0 {
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(args, " "))
 	}
@@ -95,7 +108,7 @@ func (c *PushCommand) Run(ctx context.Context, args []string) error {
 	}
 	defer func() {
 		if err := releaseLock(); err != nil && verbose {
-			_, _ = fmt.Fprintf(c.stderr, "warning: release lock: %v\n", err)
+			c.console.Warn("Release lock: %v", err)
 		}
 	}()
 
@@ -141,7 +154,7 @@ func (c *PushCommand) Run(ctx context.Context, args []string) error {
 	}
 
 	if len(processed) == 0 {
-		_, _ = fmt.Fprintln(c.stdout, "No customers matched the selection. Run `newo pull` first to initialise state.")
+		c.console.Info("No customers matched the selection. Run `newo pull` first to initialise state.")
 	}
 
 	if registryDirty {
@@ -154,12 +167,16 @@ func (c *PushCommand) Run(ctx context.Context, args []string) error {
 }
 
 func (c *PushCommand) pushCustomer(ctx context.Context, session *session.Session, shouldPublish bool, verbose bool, force bool) error {
+	c.ensureConsole()
+	if verbose {
+		c.console.Section(fmt.Sprintf("Push %s", session.IDN))
+	}
 	projectMap, err := state.LoadProjectMap(session.IDN)
 	if err != nil {
 		return err
 	}
 	if len(projectMap.Projects) == 0 {
-		_, _ = fmt.Fprintf(c.stdout, "No project map for %s. Run `newo pull --customer %s` first.\n", session.IDN, session.IDN)
+		c.console.Info("No project map for %s. Run `newo pull --customer %s` first.", session.IDN, session.IDN)
 		return nil
 	}
 
@@ -168,7 +185,7 @@ func (c *PushCommand) pushCustomer(ctx context.Context, session *session.Session
 		return err
 	}
 	if len(oldHashes) == 0 {
-		_, _ = fmt.Fprintf(c.stdout, "No hash snapshot for %s. Run `newo pull --customer %s` to initialise tracking.\n", session.IDN, session.IDN)
+		c.console.Info("No hash snapshot for %s. Run `newo pull --customer %s` to initialise tracking.", session.IDN, session.IDN)
 		return nil
 	}
 
@@ -206,7 +223,7 @@ func (c *PushCommand) pushCustomer(ctx context.Context, session *session.Session
 					content, readErr := os.ReadFile(scriptPath)
 					if readErr != nil {
 						if errors.Is(readErr, os.ErrNotExist) {
-							_, _ = fmt.Fprintf(c.stderr, "skipping %s: file not found; run `newo pull` to resynchronise\n", normalized)
+							c.console.Warn("Skipping %s: file not found; run `newo pull` to resynchronise", normalized)
 							continue
 						}
 						errs = append(errs, fmt.Errorf("read %s: %w", normalized, readErr))
@@ -214,7 +231,7 @@ func (c *PushCommand) pushCustomer(ctx context.Context, session *session.Session
 					}
 
 					if strings.TrimSpace(skillInfo.ID) == "" {
-						_, _ = fmt.Fprintf(c.stderr, "skipping %s: missing remote skill identifier; run `newo pull`\n", normalized)
+						c.console.Warn("Skipping %s: missing remote skill identifier; run `newo pull`", normalized)
 						continue
 					}
 
@@ -226,7 +243,7 @@ func (c *PushCommand) pushCustomer(ctx context.Context, session *session.Session
 						continue
 					}
 					if !found {
-						_, _ = fmt.Fprintf(c.stderr, "skipping %s: remote skill not found; run `newo pull`\n", normalized)
+						c.console.Warn("Skipping %s: remote skill not found; run `newo pull`", normalized)
 						errs = append(errs, fmt.Errorf("remote skill missing for %s", normalized))
 						continue
 					}
@@ -235,7 +252,7 @@ func (c *PushCommand) pushCustomer(ctx context.Context, session *session.Session
 					remoteHash := util.SHA256String(remoteScript)
 
 					if tracked && oldHash != "" && remoteHash != oldHash {
-						_, _ = fmt.Fprintf(c.stderr, "skipping %s: remote version changed since last pull; run `newo pull`\n", normalized)
+						c.console.Warn("Skipping %s: remote version changed since last pull; run `newo pull`", normalized)
 						errs = append(errs, fmt.Errorf("remote changed for %s", normalized))
 						continue
 					}
@@ -246,25 +263,25 @@ func (c *PushCommand) pushCustomer(ctx context.Context, session *session.Session
 					}
 
 					if !tracked {
-						_, _ = fmt.Fprintf(c.stderr, "skipping %s: not tracked in hashes; run `newo pull` to refresh mapping\n", normalized)
+						c.console.Warn("Skipping %s: not tracked in hashes; run `newo pull` to refresh mapping", normalized)
 						continue
 					}
 
 					if !force {
 						lines := diff.Generate([]byte(remoteScript), []byte(localScript), 3)
-						_, _ = fmt.Fprint(c.stdout, diff.Format(normalized, lines))
+						c.console.Write(diff.Format(normalized, lines))
 
-						_, _ = fmt.Fprintf(c.stdout, "Push changes? [y/N]: ")
+						c.console.Prompt("Push changes? [y/N]: ")
 						reader := bufio.NewReader(os.Stdin)
 						text, _ := reader.ReadString('\n')
 						if strings.TrimSpace(strings.ToLower(text)) != "y" {
-							_, _ = fmt.Fprintf(c.stdout, "Skipping.\n")
+							c.console.Info("Skipping.")
 							continue
 						}
 					}
 
 					if verbose {
-						_, _ = fmt.Fprintf(c.stdout, "→ Updating skill %s/%s/%s\n", projectIDN, flowIDN, skillIDN)
+						c.console.Info("Updating skill %s/%s/%s", projectIDN, flowIDN, skillIDN)
 					}
 
 					if err := c.pushSkill(ctx, session.Client, remoteSkill, skillInfo, localScript); err != nil {
@@ -297,15 +314,15 @@ func (c *PushCommand) pushCustomer(ctx context.Context, session *session.Session
 	}
 
 	if updatedSkills == 0 && len(errs) == 0 {
-		_, _ = fmt.Fprintf(c.stdout, "No changes to push for %s.\n", session.IDN)
+		c.console.Info("No changes to push for %s.", session.IDN)
 		return nil
 	}
 
 	if updatedSkills > 0 {
 		if verbose {
-			_, _ = fmt.Fprintf(c.stdout, "Updated %d skill(s) for %s\n", updatedSkills, session.IDN)
+			c.console.Success("Updated %d skill(s) for %s", updatedSkills, session.IDN)
 		} else {
-			_, _ = fmt.Fprintf(c.stdout, "Push complete for %s (%d skill(s) updated)\n", session.IDN, updatedSkills)
+			c.console.Success("Push complete for %s (%d skill(s) updated)", session.IDN, updatedSkills)
 		}
 
 		if err := state.SaveProjectMap(session.IDN, projectMap); err != nil {
@@ -318,13 +335,13 @@ func (c *PushCommand) pushCustomer(ctx context.Context, session *session.Session
 
 		if shouldPublish && len(flowsToPublish) > 0 {
 			if verbose {
-				_, _ = fmt.Fprintf(c.stdout, "Publishing %d flow(s) for %s\n", len(flowsToPublish), session.IDN)
+				c.console.Info("Publishing %d flow(s) for %s", len(flowsToPublish), session.IDN)
 			}
 			for flowID, meta := range flowsToPublish {
 				if err := session.Client.PublishFlow(ctx, flowID, defaultPublishRequest()); err != nil {
 					errs = append(errs, fmt.Errorf("publish flow %s/%s/%s: %w", meta.projectIDN, meta.agentIDN, meta.flowIDN, err))
 				} else if verbose {
-					_, _ = fmt.Fprintf(c.stdout, "   published %s/%s/%s\n", meta.projectIDN, meta.agentIDN, meta.flowIDN)
+					c.console.Info("  published %s/%s/%s", meta.projectIDN, meta.agentIDN, meta.flowIDN)
 				}
 			}
 		}

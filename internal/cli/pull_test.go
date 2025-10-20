@@ -284,7 +284,7 @@ func TestWriteFileWithHashSkipsOnDecline(t *testing.T) {
 		t.Fatalf("expected hash %q, got %q", existingHash, got)
 	}
 
-	if !strings.Contains(out.String(), "Skipping overwrite.") {
+	if !strings.Contains(out.String(), "Keeping existing file.") {
 		t.Fatalf("expected skip message in stdout, got %q", out.String())
 	}
 }
