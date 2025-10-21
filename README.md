@@ -1,184 +1,168 @@
 # newo-tool
 
-A command-line interface (CLI) for interacting with the newo.ai platform.
+`newo` is the CLI companion for the NEWO platform. Pull projects to disk, lint and format NSL scripts, run health checks, merge environments, generate code via LLMs, and push your changes back safely.
 
+---
 ## Installation
 
-### Homebrew (macOS and Linux)
-
+### Homebrew (macOS & Linux)
 ```bash
 brew tap twinmind/newo
 brew install newo
 ```
+Upgrade when a new release ships:
+```bash
+brew upgrade newo
+```
 
-### Manual
-
+### Manual download
 1. Download the latest release from the [GitHub Releases](https://github.com/twinmind/newo-tool/releases) page.
-2. Unpack the archive.
-3. Move the `newo` binary to a directory in your `$PATH` (e.g., `/usr/local/bin`).
+2. Unpack the archive for your platform.
+3. Move the `newo` binary somewhere in your `$PATH` (for example `/usr/local/bin`).
 
-## Configuration
-
-The `newo` CLI can be configured via a `newo.toml` file in the current directory or via environment variables.
-
-### `newo.toml` file
-
-The `newo.toml` file contains sensitive information (API keys) and should not be committed to version control. This repository contains a `newo.toml.example` file that you can use as a template.
-
-1. Copy `newo.toml.example` to `newo.toml`:
-   ```bash
-   cp newo.toml.example newo.toml
-   ```
-2. Edit `newo.toml` to add your API keys and other settings.
-
-```toml
-[defaults]
-# Path to download projects to. If empty, downloads to the current directory.
-output_root = ""
-
-# A prefix to be added to the project slug (directory name).
-slug_prefix = ""
-
-# The base URL of the NEWO platform.
-base_url = "https://app.newo.ai"
-
-# The default customer IDN to use if not specified otherwise.
-default_customer = ""
-
-# The default project UUID to use.
-project_id = ""
-
-# You can define multiple customer profiles.
-[[customers]]
-idn = "customer-idn-1"
-api_key = "your-api-key-1"
-project_id = "project-uuid-1"
-
-[[customers]]
-idn = "customer-idn-2"
-api_key = "your-api-key-2"
-project_id = "project-uuid-2"
-```
-
-### Environment Variables
-
-You can also use environment variables to configure the CLI. These will override the values in `newo.toml`.
-
-- `NEWO_BASE_URL`: The base URL of the NEWO platform.
-- `NEWO_PROJECT_ID`: The default project UUID.
-- `NEWO_API_KEY`: An API key for a single customer.
-- `NEWO_DEFAULT_CUSTOMER`: The default customer IDN.
-- `NEWO_OUTPUT_ROOT`: Path to download projects to.
-
-## Usage
-
-### `newo help`
-
-Show usage information for a command.
-
-```bash
-newo help [command]
-```
-
-### `newo version`
-
-Show build version and commit.
-
-```bash
-newo version
-```
-
-### `newo pull`
-
-Synchronise projects, agents, flows, and skills from NEWO to disk.
-
-```bash
-newo pull [flags]
-```
-
-**Flags:**
-
-- `--force`: Overwrite local skill scripts without prompting.
-- `--verbose`: Enable verbose logging.
-- `--customer <idn>`: Customer IDN to limit the pull to.
-- `--project <uuid>`: Restrict pull to a single project UUID.
-
-### `newo push`
-
-Upload local changes back to NEWO.
-
-```bash
-newo push [flags]
-```
-
-**Flags:**
-
-- `--verbose`: Show detailed output.
-- `--customer <idn>`: Customer IDN to push.
-- `--no-publish`: Skip publishing flows after upload.
-- `--force`: Skip interactive diff and confirmation.
-
-### `newo status`
-
-Show local changes since the last pull.
-
-```bash
-newo status [flags]
-```
-
-**Flags:**
-
-- `--verbose`: Show detailed information.
-- `--customer <idn>`: Customer IDN to inspect.
-
-### `newo lint`
-
-Lint `.nsl` files in downloaded projects.
-
-```bash
-newo lint
-```
-
-### `newo fmt`
-
-Format `.nsl` files in downloaded projects. This command will automatically trim trailing whitespace and collapse multiple blank lines to a single blank line.
-
-```bash
-newo fmt
-```
-
-## Development
-
-This project uses Go modules and a `Makefile` for common tasks.
-
-### Build
-
-To build the `newo` binary:
-
+### Build from source
 ```bash
 make build
+./bin/newo version
+```
+Requires Go 1.21+.
+
+---
+## Quick start
+1. Place a `newo.toml` in your workspace (see example below).
+2. Pull: `newo pull --customer calcom`.
+3. Edit local `.nsl` / `.meta.yaml` files.
+4. Lint & optionally fix: `newo lint --customer calcom --fix`.
+5. Push: `newo push --customer calcom` (publishes flows unless `--no-publish`).
+
+---
+## Configuration
+
+### Example `newo.toml`
+```toml
+[defaults]
+output_root = "integrations"            # local export root for pull/push
+slug_prefix = ""
+include_hidden_attributes = true
+base_url = "https://app.newo.ai"
+
+default_customer = "NEYjADiZWc"
+
+[[customers]]
+idn = "NEYjADiZWc"
+alias = "calcom"
+type = "integration"
+api_key = "<api-key>"
+  [[customers.projects]]
+    idn = "calcom"
+  [[customers.projects]]
+    idn = "calcom-sandbox"
+
+[[customers]]
+idn = "NEvwc3hSaW"
+alias = "gohigh-e2e"
+type = "e2e"
+api_key = "<api-key>"
+  [[customers.projects]]
+    idn = "gohighlevel"
+
+[[llms]]
+provider = "openai"
+model = "gpt-4.1-mini"
+api_key = "<llm-api-key>"
+```
+> A customer can declare multiple `[[customers.projects]]` entries; commands like `pull`, `fmt`, and `lint` iterate over each project for the selected customer.
+
+### Environment variables
+| Variable | Description |
+| --- | --- |
+| `NEWO_BASE_URL` | Override the API base URL. |
+| `NEWO_OUTPUT_ROOT` | Override export root. |
+| `NEWO_PROJECT_ID` / `NEWO_PROJECT_IDN` | Default project identifiers. |
+| `NEWO_DEFAULT_CUSTOMER` | Default customer IDN or alias. |
+| `NEWO_API_KEY` / `NEWO_API_KEYS` | Provide API keys when TOML is absent. |
+| `NEWO_SLUG_PREFIX` | Prefix applied to generated slugs. |
+| `NEWO_ACCESS_TOKEN`, `NEWO_REFRESH_TOKEN`, `NEWO_REFRESH_URL` | Optional automatic token refresh. |
+| `NO_COLOR` | Disable ANSI colour output. |
+
+Aliases defined in `newo.toml` are accepted everywhere `--customer` is used.
+
+---
+## Commands
+
+### `newo help [command]`
+Show usage information.
+
+### `newo version`
+Print build metadata.
+
+### `newo pull`
+Synchronise projects, agents, flows, and skills from NEWO to disk.
+```
+newo pull [flags]
+```
+**Flags:** `--customer <idn|alias>`, `--project-uuid <uuid>`, `--project-idn <idn>`, `--force`, `--verbose`.
+
+### `newo push`
+Upload local changes back to NEWO.
+```
+newo push [flags]
+```
+**Flags:** `--customer <idn|alias>`, `--no-publish`, `--force`, `--verbose`.
+
+### `newo status`
+Compare local state with the last pull.
+```
+newo status [flags]
+```
+**Flags:** `--customer <idn|alias>`, `--verbose`.
+
+### `newo lint`
+Run NSL linting.
+```
+newo lint [flags]
+```
+**Flags:** `--customer <idn|alias>`, `--fix`. With `--fix` the CLI interactively removes NSL `{# … #}` comments (answers: `y` apply once, `n` skip, `a` apply to the rest).
+
+### `newo fmt`
+Format `.nsl` files (trim trailing whitespace, collapse extra blank lines).
+```
+newo fmt [flags]
+```
+**Flags:** `--customer <idn|alias>`.
+
+### `newo generate`
+Generate NSL snippet via the configured LLM.
+```
+newo generate --prompt "Describe the logic"
+```
+Requires at least one `[[llms]]` entry in `newo.toml`.
+
+### `newo healthcheck`
+Run environment/configuration checks (config, filesystem, connectivity, local state, external tools).
+```
+newo healthcheck
 ```
 
-### Test
-
-To run the tests:
-
-```bash
-make test
+### `newo merge`
+Copy an e2e customer’s project into an integration customer.
 ```
-
-### Lint
-
-To run the linter:
-
-```bash
-make lint
+newo merge <project_idn> from <source_customer_idn> [flags]
 ```
+**Flags:** `--target-customer <idn|alias>`, `--no-pull`, `--no-push`, `--force`.
 
-### Format
+---
+## Development workflow
+| Command | Description |
+| --- | --- |
+| `make build` | Build `./bin/newo`. |
+| `make test` | Run Go tests. |
+| `make lint` | Run `golangci-lint`. |
+| `make fmt` | Apply `gofmt`. |
 
-To format the code:
+---
+## Tips
+- Use customer aliases to keep commands short: `newo pull --customer calcom`.
+- `newo lint --fix` currently targets NSL comments; more fixers will be added over time.
+- Set `NO_COLOR=1` when piping output into tools that cannot handle ANSI colours.
 
-```bash
-make fmt
-```

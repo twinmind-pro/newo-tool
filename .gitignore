@@ -25,7 +25,5 @@
 # OS
 .DS_Store
 
-# Gemini
 /GEMINI.md
 /AGENTS.md
-/AST_DEVELOPMENT_PLAN.md

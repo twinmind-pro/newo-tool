@@ -207,7 +207,9 @@ func (a *astAnalyzer) checkIdentifier(ident *ast.Identifier) {
 	a.errors = append(a.errors, LintError{
 		FilePath: a.filePath,
 		Line:     line,
+		Severity: SeverityError,
 		Message:  fmt.Sprintf("undefined variable: '%s' is used but not defined in parameters or in the skill", name),
+		Snippet:  name,
 	})
 }
 

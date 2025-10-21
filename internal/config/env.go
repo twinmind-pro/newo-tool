@@ -32,6 +32,7 @@ type Env struct {
 // FileCustomer describes a customer defined in newo.toml.
 type FileCustomer struct {
 	IDN      string
+	Alias    string
 	APIKey   string
 	Type     string
 	Projects []Project
@@ -145,6 +146,7 @@ type TomlConfig struct {
 	} `toml:"defaults"`
 	Customers []struct {
 		IDN      string    `toml:"idn"`
+		Alias    string    `toml:"alias"`
 		APIKey   string    `toml:"api_key"`
 		Type     string    `toml:"type"`
 		Projects []Project `toml:"projects"`
@@ -234,6 +236,7 @@ func mergeTomlConfig(env *Env, isOutputRootSetInToml *bool) error {
 
 		env.FileCustomers = append(env.FileCustomers, FileCustomer{
 			IDN:      strings.TrimSpace(c.IDN),
+			Alias:    strings.TrimSpace(c.Alias),
 			APIKey:   apiKey,
 			Type:     strings.TrimSpace(c.Type),
 			Projects: projects,
