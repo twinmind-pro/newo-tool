@@ -480,7 +480,9 @@ func (c *MergeCommand) lookupCustomer(entries []customer.Entry, customerIDN, pro
 	var fallback *customer.Entry
 	for i := range entries {
 		entry := &entries[i]
-		if !strings.EqualFold(entry.HintIDN, customerIDN) {
+		matchesIDN := strings.EqualFold(entry.HintIDN, customerIDN)
+		matchesAlias := entry.Alias != "" && strings.EqualFold(entry.Alias, customerIDN)
+		if !matchesIDN && !matchesAlias {
 			continue
 		}
 		if projectIDN == "" || entry.ProjectIDN == "" || strings.EqualFold(entry.ProjectIDN, projectIDN) {

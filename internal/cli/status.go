@@ -90,6 +90,9 @@ func (c *StatusCommand) Run(ctx context.Context, _ []string) error {
 		}
 		if idn != "" {
 			customers[strings.ToLower(idn)] = idn
+			if alias := strings.TrimSpace(entry.Alias); alias != "" {
+				customers[strings.ToLower(alias)] = idn
+			}
 		}
 	}
 
