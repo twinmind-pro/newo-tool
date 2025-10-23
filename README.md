@@ -103,6 +103,8 @@ newo pull [flags]
 ```
 **Flags:** `--customer <idn|alias>`, `--project-uuid <uuid>`, `--project-idn <idn>`, `--force`, `--verbose`.
 
+- Overwrite prompts accept `y` (overwrite this file), `n`/enter (skip), and `a` (apply the overwrite decision to the rest of the run).
+
 ### `newo push`
 Upload local changes back to NEWO.
 ```
@@ -165,4 +167,3 @@ newo merge <project_idn> from <source_customer_idn> [flags]
 - Use customer aliases to keep commands short: `newo pull --customer calcom`.
 - `newo lint --fix` currently targets NSL comments; more fixers will be added over time.
 - Set `NO_COLOR=1` when piping output into tools that cannot handle ANSI colours.
-

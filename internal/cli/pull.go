@@ -43,18 +43,19 @@ func (c *PullCommand) projectSlug(project platform.Project) string {
 
 // PullCommand synchronises remote platform data to the local workspace.
 type PullCommand struct {
-	stdout      io.Writer
-	stderr      io.Writer
-	console     *console.Writer
-	force       *bool
-	verbose     *bool
-	customer    *string
-	projectUUID *string
-	projectIDN  *string
-	outputRoot  string
-	slugPrefix  string
-	verboseOn   bool
-	promptMu    sync.Mutex
+	stdout            io.Writer
+	stderr            io.Writer
+	console           *console.Writer
+	force             *bool
+	verbose           *bool
+	customer          *string
+	projectUUID       *string
+	projectIDN        *string
+	outputRoot        string
+	slugPrefix        string
+	verboseOn         bool
+	applyAllOverwrite bool
+	promptMu          sync.Mutex
 }
 
 // NewPullCommand constructs a pull command using provided output writers.
@@ -93,6 +94,7 @@ func (c *PullCommand) Run(ctx context.Context, _ []string) error {
 	force := c.force != nil && *c.force
 	verbose := c.verbose != nil && *c.verbose
 	c.verboseOn = verbose
+	c.applyAllOverwrite = force
 	customerFilter := ""
 	if c.customer != nil {
 		customerFilter = strings.TrimSpace(*c.customer)
@@ -139,7 +141,9 @@ func (c *PullCommand) Run(ctx context.Context, _ []string) error {
 		return err
 	}
 
+	requestedCustomer := customerFilter
 	var processed bool
+	var matchedFilter bool
 	var registryDirty bool
 
 	for _, entry := range cfg.Entries {
@@ -148,7 +152,8 @@ func (c *PullCommand) Run(ctx context.Context, _ []string) error {
 			return err
 		}
 
-		if customerFilter != "" && !strings.EqualFold(session.IDN, customerFilter) {
+		matches := matchesCustomerToken(entry, session.IDN, customerFilter)
+		if customerFilter != "" && !matches {
 			if verbose {
 				c.console.Info("Skipping customer %s (target is %s)", session.IDN, customerFilter)
 			}
@@ -177,12 +182,13 @@ func (c *PullCommand) Run(ctx context.Context, _ []string) error {
 		}
 
 		if customerFilter != "" {
+			matchedFilter = true
 			break
 		}
 	}
 
-	if customerFilter != "" && !processed {
-		return fmt.Errorf("customer %s not configured", customerFilter)
+	if customerFilter != "" && !matchedFilter {
+		return fmt.Errorf("customer %s not configured", requestedCustomer)
 	}
 
 	if registryDirty {
@@ -720,31 +726,40 @@ func (c *PullCommand) exportAttributes(
 	}
 }
 
-func (c *PullCommand) confirmOverwrite(path string, lines []diff.Line) (bool, error) {
+func (c *PullCommand) confirmOverwrite(path string, lines []diff.Line) (bool, bool, error) {
 	c.promptMu.Lock()
 	defer c.promptMu.Unlock()
 
 	c.ensureConsole()
 	c.console.Write(diff.Format(path, lines))
-	c.console.Prompt("Overwrite local file %s? [y/N]: ", path)
+	c.console.Prompt("Overwrite local file %s? [y/N/a]: ", path)
 
 	reader := bufio.NewReader(os.Stdin)
 	text, err := reader.ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
-		return false, fmt.Errorf("read confirmation input: %w", err)
+		return false, false, fmt.Errorf("read confirmation input: %w", err)
 	}
 
 	response := strings.TrimSpace(strings.ToLower(text))
-	if response != "y" {
+	switch response {
+	case "y":
+		return true, false, nil
+	case "a":
+		c.applyAllOverwrite = true
+		c.console.Info("Applying overwrite to all subsequent files.")
+		return true, true, nil
+	default:
 		c.console.Info("Keeping existing file.")
-		return false, nil
+		return false, false, nil
 	}
-	return true, nil
 }
 
 func (c *PullCommand) writeFileWithHash(oldHashes, newHashes state.HashStore, path string, content []byte, force bool, mu *sync.Mutex) error {
 	if newHashes == nil {
 		return fmt.Errorf("hash store not initialised")
+	}
+	if c.applyAllOverwrite {
+		force = true
 	}
 
 	c.ensureConsole()
@@ -780,26 +795,32 @@ func (c *PullCommand) writeFileWithHash(oldHashes, newHashes state.HashStore, pa
 
 	// The file on disk is different from the content we are about to write.
 	// Check for uncommitted local changes first.
+	forceOverwrite := force || c.applyAllOverwrite
 	if oldHash, ok := oldHashes[normalized]; ok && oldHash != existingHash && fileExists {
-		if !force {
-			c.console.Warn("Skipping %s: local changes detected (use --force to overwrite)", normalized)
-			lines := diff.Generate(existing, content, 1)
-			c.console.WriteErr(diff.Format(normalized, lines))
-			// Preserve previous baseline so status/push still detect divergence.
-			setHash(oldHash)
-			return nil
+		if !forceOverwrite {
+			c.console.Warn("Local changes detected in %s", normalized)
+			lines := diff.Generate(existing, content, 3)
+			confirmed, _, err := c.confirmOverwrite(normalized, lines)
+			if err != nil {
+				return err
+			}
+			if !confirmed {
+				setHash(oldHash)
+				return nil
+			}
+			forceOverwrite = true
 		}
 	}
 
 	// If we are here, either there are no uncommitted changes, or --force is used.
-	// Now we ask for confirmation to overwrite.
-	if !force && fileExists {
+	// Now we ask for confirmation to overwrite (unless already applied globally).
+	if !forceOverwrite && fileExists {
 		context := -1 // Full diff
 		if !c.verboseOn {
 			context = 3
 		}
 		lines := diff.Generate(existing, content, context)
-		confirmed, err := c.confirmOverwrite(normalized, lines)
+		confirmed, _, err := c.confirmOverwrite(normalized, lines)
 		if err != nil {
 			return err
 		}

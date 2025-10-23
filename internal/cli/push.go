@@ -111,6 +111,7 @@ func (c *PushCommand) Run(ctx context.Context, args []string) error {
 
 	registryDirty := false
 	matchedFilter := false
+	requestedCustomer := customerFilter
 	processed := map[string]bool{}
 
 	for _, entry := range cfg.Entries {
@@ -122,13 +123,14 @@ func (c *PushCommand) Run(ctx context.Context, args []string) error {
 			registryDirty = true
 		}
 
-		if customerFilter != "" && !strings.EqualFold(session.IDN, customerFilter) {
+		matches := matchesCustomerToken(entry, session.IDN, customerFilter)
+		if customerFilter != "" && !matches {
 			continue
 		}
 
 		key := strings.ToLower(session.IDN)
 		if processed[key] {
-			if customerFilter != "" && strings.EqualFold(session.IDN, customerFilter) {
+			if customerFilter != "" && matches {
 				matchedFilter = true
 				break
 			}
@@ -140,14 +142,14 @@ func (c *PushCommand) Run(ctx context.Context, args []string) error {
 		}
 		processed[key] = true
 
-		if customerFilter != "" && strings.EqualFold(session.IDN, customerFilter) {
+		if customerFilter != "" && matches {
 			matchedFilter = true
 			break
 		}
 	}
 
 	if customerFilter != "" && !matchedFilter {
-		return fmt.Errorf("customer %s not configured", customerFilter)
+		return fmt.Errorf("customer %s not configured", requestedCustomer)
 	}
 
 	if len(processed) == 0 {

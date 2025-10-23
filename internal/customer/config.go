@@ -14,6 +14,7 @@ type Entry struct {
 	ProjectID  string
 	ProjectIDN string // Added to hold per-customer project IDN
 	HintIDN    string
+	Alias      string
 	Type       string // Added to hold customer type
 }
 
@@ -29,22 +30,24 @@ func FromEnv(env config.Env) (Configuration, error) {
 
 	// First, prioritize customers from the TOML file.
 	if len(env.FileCustomers) > 0 {
-		for _, fileCustomer := range env.FileCustomers {
-			if len(fileCustomer.Projects) == 0 {
-				// This customer has no projects defined in the file.
-				// Ignore them completely to avoid unintended operations.
-				continue
-			}
-			for _, p := range fileCustomer.Projects {
-				entries = append(entries, Entry{
-					APIKey:     fileCustomer.APIKey,
-					ProjectID:  p.ID,
-					ProjectIDN: p.IDN,
-					HintIDN:    fileCustomer.IDN,
-					Type:       fileCustomer.Type,
-				})
-			}
+	for _, fileCustomer := range env.FileCustomers {
+		alias := strings.TrimSpace(fileCustomer.Alias)
+		if len(fileCustomer.Projects) == 0 {
+			// This customer has no projects defined in the file.
+			// Ignore them completely to avoid unintended operations.
+			continue
 		}
+		for _, p := range fileCustomer.Projects {
+			entries = append(entries, Entry{
+				APIKey:     fileCustomer.APIKey,
+				ProjectID:  p.ID,
+				ProjectIDN: p.IDN,
+				HintIDN:    fileCustomer.IDN,
+				Alias:      alias,
+				Type:       fileCustomer.Type,
+			})
+		}
+	}
 	} else {
 		// Only if no customers are in the file, fall back to environment variables.
 		if env.APIKeysJSON != "" {
