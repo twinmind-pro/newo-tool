@@ -11,9 +11,10 @@
 # Local state
 /.newo/
 /newo_customers/
+/integrations/
+/integrations_e2e/
+/old/
 /docs/
-/integrations/**
-/**_e2e/**
 
 # Configuration
 /newo.toml
