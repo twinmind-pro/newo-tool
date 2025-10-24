@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -166,7 +167,13 @@ func (c *Client) do(ctx context.Context, method, path string, query map[string]s
 	if dest == nil {
 		return nil
 	}
-	return json.NewDecoder(resp.Body).Decode(dest)
+	if err := json.NewDecoder(resp.Body).Decode(dest); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 // ListProjects returns all projects visible to the customer.
@@ -176,6 +183,20 @@ func (c *Client) ListProjects(ctx context.Context) ([]Project, error) {
 		return nil, err
 	}
 	return projects, nil
+}
+
+// CreateProject creates a project and returns its identifier.
+func (c *Client) CreateProject(ctx context.Context, payload CreateProjectRequest) (CreateProjectResponse, error) {
+	var resp CreateProjectResponse
+	if err := c.do(ctx, http.MethodPost, "/api/v1/designer/projects", nil, payload, &resp); err != nil {
+		return CreateProjectResponse{}, err
+	}
+	return resp, nil
+}
+
+// DeleteProject removes a project by ID.
+func (c *Client) DeleteProject(ctx context.Context, projectID string) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/designer/projects/"+projectID, nil, nil, nil)
 }
 
 // GetProject retrieves project metadata by ID.
@@ -196,6 +217,16 @@ func (c *Client) ListAgents(ctx context.Context, projectID string) ([]Agent, err
 	return agents, nil
 }
 
+// CreateAgent creates a new agent under the specified project.
+func (c *Client) CreateAgent(ctx context.Context, projectID string, payload CreateAgentRequest) (CreateAgentResponse, error) {
+	var resp CreateAgentResponse
+	path := fmt.Sprintf("/api/v2/designer/%s/agents", projectID)
+	if err := c.do(ctx, http.MethodPost, path, nil, payload, &resp); err != nil {
+		return CreateAgentResponse{}, err
+	}
+	return resp, nil
+}
+
 // ListFlowSkills returns skills in a flow.
 func (c *Client) ListFlowSkills(ctx context.Context, flowID string) ([]Skill, error) {
 	var skills []Skill
@@ -203,6 +234,16 @@ func (c *Client) ListFlowSkills(ctx context.Context, flowID string) ([]Skill, er
 		return nil, err
 	}
 	return skills, nil
+}
+
+// CreateFlow creates an empty flow under the specified agent.
+func (c *Client) CreateFlow(ctx context.Context, agentID string, payload CreateFlowRequest) (CreateFlowResponse, error) {
+	var resp CreateFlowResponse
+	path := fmt.Sprintf("/api/v1/designer/%s/flows/empty", agentID)
+	if err := c.do(ctx, http.MethodPost, path, nil, payload, &resp); err != nil {
+		return CreateFlowResponse{}, err
+	}
+	return resp, nil
 }
 
 // GetSkill retrieves a skill by ID.
@@ -251,6 +292,16 @@ func (c *Client) DeleteSkill(ctx context.Context, skillID string) error {
 	return c.do(ctx, http.MethodDelete, "/api/v1/designer/flows/skills/"+skillID, nil, nil, nil)
 }
 
+// CreateSkillParameter creates a new parameter under a skill.
+func (c *Client) CreateSkillParameter(ctx context.Context, skillID string, payload CreateSkillParameterRequest) (CreateSkillParameterResponse, error) {
+	var resp CreateSkillParameterResponse
+	path := fmt.Sprintf("/api/v1/designer/flows/skills/%s/parameters", skillID)
+	if err := c.do(ctx, http.MethodPost, path, nil, payload, &resp); err != nil {
+		return CreateSkillParameterResponse{}, err
+	}
+	return resp, nil
+}
+
 // GetCustomerProfile returns information about the authenticated customer.
 func (c *Client) GetCustomerProfile(ctx context.Context) (CustomerProfile, error) {
 	var profile CustomerProfile
@@ -276,6 +327,36 @@ func (c *Client) GetCustomerAttributes(ctx context.Context, includeHidden bool) 
 // PublishFlow publishes a flow after updates.
 func (c *Client) PublishFlow(ctx context.Context, flowID string, payload PublishFlowRequest) error {
 	return c.do(ctx, http.MethodPost, "/api/v1/designer/flows/"+flowID+"/publish", nil, payload, nil)
+}
+
+// CreateFlowEvent creates an event for the specified flow.
+func (c *Client) CreateFlowEvent(ctx context.Context, flowID string, payload CreateFlowEventRequest) (CreateFlowEventResponse, error) {
+	var resp CreateFlowEventResponse
+	path := fmt.Sprintf("/api/v1/designer/flows/%s/events", flowID)
+	if err := c.do(ctx, http.MethodPost, path, nil, payload, &resp); err != nil {
+		return CreateFlowEventResponse{}, err
+	}
+	return resp, nil
+}
+
+// DeleteFlowEvent removes a flow event by ID.
+func (c *Client) DeleteFlowEvent(ctx context.Context, eventID string) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/designer/flows/events/"+eventID, nil, nil, nil)
+}
+
+// CreateFlowState creates a state field for the specified flow.
+func (c *Client) CreateFlowState(ctx context.Context, flowID string, payload CreateFlowStateRequest) (CreateFlowStateResponse, error) {
+	var resp CreateFlowStateResponse
+	path := fmt.Sprintf("/api/v1/designer/flows/%s/states", flowID)
+	if err := c.do(ctx, http.MethodPost, path, nil, payload, &resp); err != nil {
+		return CreateFlowStateResponse{}, err
+	}
+	return resp, nil
+}
+
+// DeleteFlowState removes a state field by ID.
+func (c *Client) DeleteFlowState(ctx context.Context, stateID string) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/designer/flows/states/"+stateID, nil, nil, nil)
 }
 
 func networkError(err error) error {

@@ -24,30 +24,46 @@ type Configuration struct {
 	DefaultCustomer string
 }
 
+// FindCustomer resolves a customer by IDN or alias.
+func (cfg Configuration) FindCustomer(id string) (*Entry, error) {
+	token := strings.TrimSpace(id)
+	if token == "" {
+		return nil, fmt.Errorf("customer identifier is required")
+	}
+	for idx := range cfg.Entries {
+		entry := &cfg.Entries[idx]
+		if strings.EqualFold(entry.HintIDN, token) || (entry.Alias != "" && strings.EqualFold(entry.Alias, token)) {
+			return entry, nil
+		}
+	}
+	return nil, fmt.Errorf("customer %s not configured", token)
+}
+
 // FromEnv parses customer configuration from environment variables.
 func FromEnv(env config.Env) (Configuration, error) {
 	var entries []Entry
 
 	// First, prioritize customers from the TOML file.
 	if len(env.FileCustomers) > 0 {
-	for _, fileCustomer := range env.FileCustomers {
-		alias := strings.TrimSpace(fileCustomer.Alias)
-		if len(fileCustomer.Projects) == 0 {
-			// This customer has no projects defined in the file.
-			// Ignore them completely to avoid unintended operations.
-			continue
+		for _, fileCustomer := range env.FileCustomers {
+			alias := strings.TrimSpace(fileCustomer.Alias)
+			entry := Entry{
+				APIKey:  fileCustomer.APIKey,
+				HintIDN: fileCustomer.IDN,
+				Alias:   alias,
+				Type:    fileCustomer.Type,
+			}
+			if len(fileCustomer.Projects) == 0 {
+				entries = append(entries, entry)
+				continue
+			}
+			for _, p := range fileCustomer.Projects {
+				sized := entry
+				sized.ProjectID = p.ID
+				sized.ProjectIDN = p.IDN
+				entries = append(entries, sized)
+			}
 		}
-		for _, p := range fileCustomer.Projects {
-			entries = append(entries, Entry{
-				APIKey:     fileCustomer.APIKey,
-				ProjectID:  p.ID,
-				ProjectIDN: p.IDN,
-				HintIDN:    fileCustomer.IDN,
-				Alias:      alias,
-				Type:       fileCustomer.Type,
-			})
-		}
-	}
 	} else {
 		// Only if no customers are in the file, fall back to environment variables.
 		if env.APIKeysJSON != "" {

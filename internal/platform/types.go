@@ -10,6 +10,23 @@ type Project struct {
 	UpdatedAt   string `json:"updated_at"`
 }
 
+// CreateProjectRequest represents the payload for creating a project.
+type CreateProjectRequest struct {
+	IDN                 string `json:"idn"`
+	Title               string `json:"title"`
+	Version             string `json:"version,omitempty"`
+	Description         string `json:"description,omitempty"`
+	IsAutoUpdateEnabled bool   `json:"is_auto_update_enabled,omitempty"`
+	RegistryIDN         string `json:"registry_idn,omitempty"`
+	RegistryItemIDN     string `json:"registry_item_idn,omitempty"`
+	RegistryItemVersion string `json:"registry_item_version,omitempty"`
+}
+
+// CreateProjectResponse captures identifiers for a newly created project.
+type CreateProjectResponse struct {
+	ID string `json:"id"`
+}
+
 // Agent represents an agent belonging to a project.
 type Agent struct {
 	ID          string `json:"id"`
@@ -17,6 +34,19 @@ type Agent struct {
 	Title       string `json:"title"`
 	Description string `json:"description"`
 	Flows       []Flow `json:"flows"`
+}
+
+// CreateAgentRequest represents the payload for creating an agent.
+type CreateAgentRequest struct {
+	IDN         string `json:"idn"`
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
+	PersonaID   string `json:"persona_id,omitempty"`
+}
+
+// CreateAgentResponse captures the identifier assigned to a new agent.
+type CreateAgentResponse struct {
+	ID string `json:"id"`
 }
 
 // Flow describes a flow attached to an agent.
@@ -27,6 +57,18 @@ type Flow struct {
 	Description       string      `json:"description"`
 	DefaultRunnerType string      `json:"default_runner_type"`
 	DefaultModel      ModelConfig `json:"default_model"`
+}
+
+// CreateFlowRequest represents the payload for creating a flow.
+type CreateFlowRequest struct {
+	IDN         string `json:"idn"`
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
+}
+
+// CreateFlowResponse captures the identifier assigned to a new flow.
+type CreateFlowResponse struct {
+	ID string `json:"id"`
 }
 
 // ModelConfig contains model identifiers.
@@ -67,6 +109,23 @@ type FlowEvent struct {
 	InterruptMode  string `json:"interrupt_mode"`
 }
 
+// CreateFlowEventRequest represents payload to create a flow event.
+type CreateFlowEventRequest struct {
+	IDN            string `json:"idn"`
+	Description    string `json:"description,omitempty"`
+	SkillSelector  string `json:"skill_selector"`
+	SkillIDN       string `json:"skill_idn,omitempty"`
+	StateIDN       string `json:"state_idn,omitempty"`
+	InterruptMode  string `json:"interrupt_mode"`
+	IntegrationIDN string `json:"integration_idn"`
+	ConnectorIDN   string `json:"connector_idn"`
+}
+
+// CreateFlowEventResponse captures identifier assigned to a new flow event.
+type CreateFlowEventResponse struct {
+	ID string `json:"id"`
+}
+
 // FlowState captures state fields for a flow.
 type FlowState struct {
 	ID           string `json:"id"`
@@ -74,6 +133,19 @@ type FlowState struct {
 	Title        string `json:"title"`
 	DefaultValue string `json:"default_value"`
 	Scope        string `json:"scope"`
+}
+
+// CreateFlowStateRequest represents payload to create a flow state.
+type CreateFlowStateRequest struct {
+	Title        string `json:"title"`
+	IDN          string `json:"idn"`
+	DefaultValue string `json:"default_value,omitempty"`
+	Scope        string `json:"scope"`
+}
+
+// CreateFlowStateResponse captures identifier assigned to a new flow state.
+type CreateFlowStateResponse struct {
+	ID string `json:"id"`
 }
 
 // CustomerProfile describes a NEWO customer.
@@ -127,6 +199,17 @@ type CreateSkillRequest struct {
 
 // CreateSkillResponse captures the identifier assigned to a newly created skill.
 type CreateSkillResponse struct {
+	ID string `json:"id"`
+}
+
+// CreateSkillParameterRequest represents payload to create a skill parameter.
+type CreateSkillParameterRequest struct {
+	Name         string `json:"name"`
+	DefaultValue string `json:"default_value,omitempty"`
+}
+
+// CreateSkillParameterResponse captures identifier assigned to a new parameter.
+type CreateSkillParameterResponse struct {
 	ID string `json:"id"`
 }
 
