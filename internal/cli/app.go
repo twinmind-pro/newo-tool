@@ -37,6 +37,7 @@ func New(stdout, stderr io.Writer) *App {
 	app.Register(NewHealthcheckCommand(stdout, stderr))
 	app.Register(NewMergeCommand(stdout, stderr))
 	app.Register(NewDeployCommand(stdout, stderr))
+	app.Register(NewCreateCommand(stdout, stderr))
 
 	return app
 }

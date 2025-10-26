@@ -42,6 +42,7 @@ type DeployRequest struct {
 	OutputRoot         string
 	WorkspaceDir       string
 	Reporter           Reporter
+	Attributes         []byte
 }
 
 // DeployResult summarises the performed operations.
@@ -346,14 +347,7 @@ func (s *Service) projectExists(ctx context.Context, projectIDN string) (bool, e
 }
 
 func (s *Service) populateFlowIDs(ctx context.Context, projectID string, agentPlan AgentPlan) error {
-	needsResolution := false
-	for _, flow := range agentPlan.Flows {
-		if strings.TrimSpace(flow.CreatedFlowID) == "" {
-			needsResolution = true
-			break
-		}
-	}
-	if !needsResolution {
+	if len(agentPlan.Flows) == 0 {
 		return nil
 	}
 	agents, err := s.client.ListAgents(ctx, projectID)
@@ -372,24 +366,34 @@ func (s *Service) populateFlowIDs(ctx context.Context, projectID string, agentPl
 		return fmt.Errorf("agent %s not found when resolving flow identifiers", agentPlan.IDN)
 	}
 
-	for idx := range agentPlan.Flows {
-		flowPlan := &agentPlan.Flows[idx]
-		if strings.TrimSpace(flowPlan.CreatedFlowID) != "" {
+	lookup := make(map[string]platform.Flow, len(remoteAgent.Flows))
+	for _, remoteFlow := range remoteAgent.Flows {
+		key := strings.ToLower(strings.TrimSpace(remoteFlow.IDN))
+		if key == "" {
 			continue
 		}
-		found := ""
-		for _, remoteFlow := range remoteAgent.Flows {
-			if strings.EqualFold(strings.TrimSpace(remoteFlow.IDN), flowPlan.IDN) {
-				found = strings.TrimSpace(remoteFlow.ID)
-				flowPlan.DefaultRunnerType = remoteFlow.DefaultRunnerType
-				flowPlan.DefaultModel = remoteFlow.DefaultModel
-				break
-			}
+		lookup[key] = remoteFlow
+	}
+
+	for idx := range agentPlan.Flows {
+		flowPlan := &agentPlan.Flows[idx]
+		key := strings.ToLower(strings.TrimSpace(flowPlan.IDN))
+		if key == "" {
+			return fmt.Errorf("flow with empty idn in plan")
 		}
-		if found == "" {
+		remoteFlow, ok := lookup[key]
+		if !ok {
 			return fmt.Errorf("flow %s not returned by ListAgents", flowPlan.IDN)
 		}
-		flowPlan.CreatedFlowID = found
+		if strings.TrimSpace(flowPlan.CreatedFlowID) == "" {
+			flowPlan.CreatedFlowID = strings.TrimSpace(remoteFlow.ID)
+		}
+		if strings.TrimSpace(flowPlan.DefaultRunnerType) == "" {
+			flowPlan.DefaultRunnerType = remoteFlow.DefaultRunnerType
+		}
+		if strings.TrimSpace(flowPlan.DefaultModel.ModelIDN) == "" || strings.TrimSpace(flowPlan.DefaultModel.ProviderIDN) == "" {
+			flowPlan.DefaultModel = remoteFlow.DefaultModel
+		}
 	}
 	return nil
 }
@@ -422,6 +426,18 @@ func (s *Service) writeLocalArtifacts(projectID string, req DeployRequest, proje
 	}
 	result.Hashes[hashKey] = hashBytes(projectJSONBytes)
 	result.ProjectJSONRaw = projectJSONBytes
+
+	if req.Attributes != nil {
+		attributesPath := filepath.Join(targetRoot, fsutil.AttributesYAML)
+		if err := writeFile(attributesPath, req.Attributes); err != nil {
+			return fmt.Errorf("write attributes.yaml: %w", err)
+		}
+		hashKey, err = workspaceRelative(workspace, attributesPath)
+		if err != nil {
+			return err
+		}
+		result.Hashes[hashKey] = hashBytes(req.Attributes)
+	}
 
 	// Write flow directories, scripts, metadata.
 	for agentIDN, agent := range projectData.Agents {
@@ -642,6 +658,9 @@ func scriptExtension(relPath string) string {
 }
 
 func workspaceRelative(workspace, path string) (string, error) {
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(workspace, path)
+	}
 	rel, err := filepath.Rel(workspace, path)
 	if err != nil {
 		return "", fmt.Errorf("compute relative path for %s: %w", path, err)
